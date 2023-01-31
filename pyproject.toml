@@ -1,0 +1,22 @@
+[tool.poetry]
+name = "chess"
+version = "0.1.0"
+description = ""
+authors = ["Anthony Printup <anthony@printup.io>"]
+readme = "README.md"
+packages = [{include = "chess", from = "src"}]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+selenium = "^4.8.0"
+
+
+[tool.poetry.group.dev.dependencies]
+flake8 = "^6.0.0"
+mypy = "^0.991"
+pytest = "^7.2.1"
+pre-commit = "^3.0.2"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
