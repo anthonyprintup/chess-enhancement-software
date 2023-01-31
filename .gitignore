@@ -1,0 +1,16 @@
+# User-specific stuff
+.idea/
+
+### Python template
+__pycache__/
+
+# Distribution / packaging
+dist/
+
+# Unit test / coverage reports
+htmlcov/
+.coverage
+.pytest_cache/
+
+# mypy
+.mypy_cache/
