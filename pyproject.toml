@@ -1,14 +1,15 @@
 [tool.poetry]
-name = "chess"
+name = "chess-enhancement-software"
 version = "0.1.0"
 description = ""
 authors = ["Anthony Printup <anthony@printup.io>"]
 readme = "README.md"
-packages = [{include = "chess", from = "src"}]
+packages = [{include = "chess.enhancement.software", from = "src"}]
 
 [tool.poetry.dependencies]
 python = "^3.11"
-selenium = "^4.8.0"
+playwright = "^1.30.0"
+chess = "^1.9.4"
 
 
 [tool.poetry.group.dev.dependencies]
