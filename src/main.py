@@ -42,7 +42,7 @@ class Round:
     chess_engine: ChessEngine
     chess_engine_limits: ChessEngineLimit = field(default_factory=ChessEngineLimit)
     _takeback_offer_origin: str = ""
-    shadow_root: JSHandle = field(init=False)
+    _shadow_root: JSHandle = field(init=False)
 
     @staticmethod
     async def create(page: Page, move_data: list[dict]) -> Round:
@@ -114,7 +114,7 @@ class Round:
     async def create_shadow_root(self, page: Page) -> None:
         # Create a shadow-root in the board element and add a resize observer
         board_locator: Locator = page.locator(selector="cg-board")
-        self.shadow_root = await board_locator.evaluate_handle(
+        self._shadow_root = await board_locator.evaluate_handle(
             expression="""boardElement => {
                 // Create a closed shadow-root
                 const shadowRoot = boardElement.attachShadow({mode: "closed"});
@@ -145,7 +145,7 @@ class Round:
             }""")
 
     async def redraw_canvas(self) -> None:
-        await self.shadow_root.as_element().eval_on_selector(
+        await self._shadow_root.as_element().eval_on_selector(
             selector="#drawing-canvas", expression="""canvas => {
                 const context2d = canvas.getContext("2d");
                 // Clear the canvas
@@ -161,7 +161,7 @@ class Round:
             }""")
 
     async def shutdown(self) -> None:
-        # Note: do not call self.shadow_root.dispose(), it'll prevent Playwright from closing
+        # Note: do not call self._shadow_root.dispose(), it'll prevent Playwright from closing
         await self.chess_engine.quit()
         self.transport.close()
         await asyncio.sleep(0)
