@@ -151,8 +151,7 @@ class Lichess(BrowserHandler):
         # Register an event listener for websocket events
         page.on("websocket", functools.partial(self.on_websocket_created, page=page))
 
-    # noinspection PyUnusedLocal
-    async def on_context_close(self, context: BrowserContext) -> None:
+    async def on_context_close(self, _: BrowserContext) -> None:
         for game_round in self.chess_rounds.values():
             await game_round.shutdown()
         self.chess_rounds.clear()
