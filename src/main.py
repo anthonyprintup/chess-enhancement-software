@@ -249,15 +249,15 @@ class Lichess(BrowserHandler):
                 board=chess_round.chess_board, limit=chess_round.chess_engine_limits)
             best_move: chess.engine.BestMove = await analysis.wait()
             assert best_move.move is not None
-            assert best_move.ponder is not None
 
             # Revert the depth
             if depth and depth != previous_depth:
                 chess_round.chess_engine_limits.depth = previous_depth
 
             # Return the result
+            ponder_move_info: str = f" ponder move={best_move.ponder.uci()}" if best_move.ponder is not None else ""
             score: chess.engine.PovScore = analysis.info["score"]
-            return f"best move={best_move.move.uci()} ponder move={best_move.ponder.uci()} score={score}"
+            return f"best move={best_move.move.uci()}{ponder_move_info} score={score}"
         return "couldn't find a game"
 
     def set_depth(self, page: Page, depth: int) -> None:
