@@ -12,8 +12,8 @@ from typing import Any, AsyncIterator, Pattern, TypeVar
 
 import chess
 from chess.engine import Limit as ChessEngineLimit, UciProtocol as ChessEngine, popen_uci as open_chess_engine
-from playwright.async_api import Browser, BrowserContext, JSHandle, Locator, Page, Playwright, WebSocket, \
-    async_playwright
+from playwright.async_api import Browser, BrowserContext, ElementHandle, JSHandle, Locator, Page, Playwright, \
+    WebSocket, async_playwright
 
 BINARIES_PATH: Path = Path.cwd() / "binaries"
 STOCKFISH_PATH: Path = BINARIES_PATH / "stockfish"
@@ -145,7 +145,10 @@ class Round:
             }""")
 
     async def redraw_canvas(self) -> None:
-        await self._shadow_root.as_element().eval_on_selector(
+        shadow_root_element: ElementHandle | None = self._shadow_root.as_element()
+        assert shadow_root_element is not None
+
+        await shadow_root_element.eval_on_selector(
             selector="#drawing-canvas", expression="""canvas => {
                 const context2d = canvas.getContext("2d");
                 // Clear the canvas
