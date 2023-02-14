@@ -186,7 +186,7 @@ class Lichess(BrowserHandler):
             return
 
         # Add a new round instance
-        move_data: list[dict] = game_data["steps"]
+        move_data: list[dict] = game_data.get("steps", game_data.get("treeParts", []))
         self.chess_rounds[web_socket.url] = await Round.create(move_data=move_data)
 
         # Register web socket events
