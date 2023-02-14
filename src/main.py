@@ -142,7 +142,7 @@ class Round:
                 })).observe(boardElement);
                 // Return the shadow-root for later access
                 return shadowRoot;
-            }""".strip())
+            }""")
 
     async def redraw_canvas(self) -> None:
         await self.shadow_root.as_element().eval_on_selector(
@@ -158,7 +158,7 @@ class Round:
                 context2d.lineTo(canvas.width, canvas.height / 8);
                 context2d.closePath();
                 context2d.stroke();
-            }""".strip())
+            }""")
 
     async def shutdown(self) -> None:
         # Note: do not call self.shadow_root.dispose(), it'll prevent Playwright from closing
