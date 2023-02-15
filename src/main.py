@@ -258,7 +258,7 @@ class Round:
         elif player_score.score() != 0:
             score_color = "#2ECC71" if player_score.score() > 0 else "#E74C3C"
         else:
-            score_color = "#34495E"
+            score_color = "#BDC3C7"
 
         # Calculate the move positions
         board_orientation: str = await shadow_root_element.evaluate(
@@ -272,9 +272,9 @@ class Round:
         assert canvas_width == canvas_height
 
         # Calculate move positions
-        best_move_position_data: tuple[float, float, float, float] = self.calculate_move_positions(
+        best_move_position_data: dict[str, float] = self.calculate_move_positions(
             board_orientation=board_orientation, piece_size=canvas_width // 8, uci_move=best_move_uci)
-        ponder_move_position_data: tuple[float, float, float, float] = self.calculate_move_positions(
+        ponder_move_position_data: dict[str, float] = self.calculate_move_positions(
             board_orientation=board_orientation, piece_size=canvas_width // 8, uci_move=ponder_move_uci)
 
         # Draw on the canvas
@@ -284,27 +284,30 @@ class Round:
                 // Clear the canvas
                 context2d.clearRect(0, 0, canvas.width, canvas.height);
 
-                // Setup default styles
-                context2d.lineWidth = 4;
-                context2d.strokeStyle = "#2ECC71";
-                context2d.globalAlpha = 0.6;
+                const drawLine = (lineWidth, color, alpha, position) => {{
+                    context2d.lineWidth = lineWidth;
+                    context2d.strokeStyle = color;
+                    context2d.fillStyle = color;
+                    context2d.globalAlpha = alpha;
 
-                // Render the best move
-                context2d.beginPath();
-                context2d.moveTo({best_move_position_data[0]}, {best_move_position_data[1]});
-                context2d.lineTo({best_move_position_data[2]}, {best_move_position_data[3]});
-                context2d.closePath();
-                context2d.stroke();
+                    // Draw the line
+                    context2d.beginPath();
+                    context2d.moveTo(position.from_x, position.from_y);
+                    context2d.lineTo(position.to_x, position.to_y);
+                    context2d.stroke();
+
+                    // Draw the circle
+                    context2d.moveTo(position.to_x, position.to_y);
+                    context2d.arc(position.to_x, position.to_y, context2d.lineWidth + 2, 0, Math.PI * 2, false);
+                    context2d.fill();
+                    context2d.closePath();
+                }};
 
                 // Render the ponder move
-                if ("{ponder_move_uci}" !== "") {{
-                    context2d.strokeStyle = "#2980B9";
-                    context2d.beginPath();
-                    context2d.moveTo({ponder_move_position_data[0]}, {ponder_move_position_data[1]});
-                    context2d.lineTo({ponder_move_position_data[2]}, {ponder_move_position_data[3]});
-                    context2d.closePath();
-                    context2d.stroke();
-                }}
+                if ("{ponder_move_uci}" !== "")
+                    drawLine(4, "#2980B9", 0.75, {ponder_move_position_data});
+                // Render the best move
+                drawLine(4, "#2ECC71", 0.75, {best_move_position_data});
 
                 // Compute the text array
                 let textArray = [];
@@ -340,9 +343,9 @@ class Round:
 
     @staticmethod
     def calculate_move_positions(board_orientation: str,
-                                 piece_size: int, uci_move: str) -> tuple[float, float, float, float]:
+                                 piece_size: int, uci_move: str) -> dict[str, float]:
         if not uci_move:
-            return 0, 0, 0, 0
+            return dict()
         canvas_width = canvas_height = piece_size * 8
 
         # Calculate the position data
@@ -358,7 +361,7 @@ class Round:
             to_x = canvas_width - to_x
             to_y = canvas_height - to_y
         # Return the position data
-        return from_x, from_y, to_x, to_y
+        return {"from_x": from_x, "from_y": from_y, "to_x": to_x, "to_y": to_y}
 
     async def shutdown(self) -> None:
         # Note: do not call self._shadow_root.dispose(), it'll prevent Playwright from closing
