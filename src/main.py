@@ -363,13 +363,12 @@ class Round:
         # Return the position data
         return {"from_x": from_x, "from_y": from_y, "to_x": to_x, "to_y": to_y}
 
+    # Note: do not call self._shadow_root.dispose(), it'll prevent Playwright from closing
     async def shutdown(self) -> None:
-        # Note: do not call self._shadow_root.dispose(), it'll prevent Playwright from closing
+        # Cancel the engine analysis task
         if self._chess_engine_analysis_task is not None and not self._chess_engine_analysis_task.done():
             self._chess_engine_analysis_task.cancel(msg="Shutting down.")
-        # TODO: check if the browser context is still valid (shadow root interaction might raise an error)
-        await self.clear_canvas()
-
+        # Stop the engine process
         await self.chess_engine.quit()
         self.transport.close()
         await asyncio.sleep(0)
@@ -496,6 +495,8 @@ class Lichess(BrowserHandler):
             if reload_data is None:  # avoid an edge case for when a rematch is accepted
                 await chess_round.on_takeback_accepted()
         elif message_type == "endData":
+            # Clear the canvas
+            await chess_round.clear_canvas()
             # Shutdown the chess round instance
             await self.perform_round_cleanup(socket_identifier=socket_identifier)
 
