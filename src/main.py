@@ -38,6 +38,7 @@ class BrowserHandler(ABC):
 @dataclass
 class Round:
     owner_page: Page
+    player_color: chess.Color
     chess_board: chess.Board
     transport: asyncio.SubprocessTransport
     chess_engine: ChessEngine
@@ -61,8 +62,9 @@ class Round:
         await engine.configure(options=settings["uci-settings"])
 
         # Create a round instance
-        round_instance: Round = Round(owner_page=page, chess_board=chess_board,
-                                      transport=transport, chess_engine=engine)
+        round_instance: Round = Round(owner_page=page,
+                                      player_color=chess.WHITE if player_color == "white" else chess.Board,
+                                      chess_board=chess_board, transport=transport, chess_engine=engine)
 
         # Configure the engine limits
         round_instance.chess_engine_limits.depth = settings["engine-limits"]["depth"]
@@ -246,10 +248,17 @@ class Round:
         ponder_move_uci: str = best_move.ponder.uci() if best_move.ponder is not None else ""
 
         analysis_score: chess.engine.PovScore = analysis.info["score"]
-        relative_score: chess.engine.Score = analysis_score.relative
-        score: str = f"{relative_score}"
-        if relative_score.is_mate():
-            score = f"#{abs(relative_score.mate())}"
+        player_score: chess.engine.Score = analysis_score.pov(color=self.player_color)
+        score: str = f"{player_score.score()}" if player_score.mate() is None else f"#{player_score.mate()}"
+
+        # Determine the background color to use for the score
+        score_color: str
+        if player_score.is_mate():
+            score_color = "#2ECC71" if player_score.mate() >= 1 else "#E74C3C"
+        elif player_score.score() != 0:
+            score_color = "#27AE60" if player_score.score() > 0 else "#C0392B"
+        else:
+            score_color = "#34495E"
 
         # Calculate the move positions
         board_orientation: str = await shadow_root_element.evaluate(
@@ -320,14 +329,20 @@ class Round:
                 context2d.fillRect(1, 1, maxWidth + 4, maxHeight);
                 context2d.fillStyle = "#000000";
                 for (const [index, text] of textArray.entries())
-                    context2d.fillText(text, 3, (index + 1) * 10);
+                    if (text.includes("score")) {{
+                        context2d.fillStyle = "{score_color}"
+                        context2d.fillRect(1, index * 10 + 2, maxWidth + 4, 10);
+                        context2d.fillStyle = "#000000";
+                        context2d.fillText(text, 3, (index + 1) * 10);
+                    }} else
+                        context2d.fillText(text, 3, (index + 1) * 10);
             }}""")
 
     async def shutdown(self) -> None:
         # Note: do not call self._shadow_root.dispose(), it'll prevent Playwright from closing
         if self._chess_engine_analysis_task is not None and not self._chess_engine_analysis_task.done():
             self._chess_engine_analysis_task.cancel(msg="Shutting down.")
-        # TODO: check if the browser context is still valid
+        # TODO: check if the browser context is still valid (shadow root interaction might raise an error)
         await self.clear_canvas()
 
         await self.chess_engine.quit()
