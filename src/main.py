@@ -63,7 +63,7 @@ class Round:
 
         # Create a round instance
         round_instance: Round = Round(owner_page=page,
-                                      player_color=chess.WHITE if player_color == "white" else chess.Board,
+                                      player_color=chess.WHITE if player_color == "white" else chess.BLACK,
                                       chess_board=chess_board, transport=transport, chess_engine=engine)
 
         # Configure the engine limits
@@ -256,7 +256,7 @@ class Round:
         if player_score.is_mate():
             score_color = "#2ECC71" if player_score.mate() >= 1 else "#E74C3C"
         elif player_score.score() != 0:
-            score_color = "#27AE60" if player_score.score() > 0 else "#C0392B"
+            score_color = "#2ECC71" if player_score.score() > 0 else "#E74C3C"
         else:
             score_color = "#34495E"
 
@@ -333,9 +333,8 @@ class Round:
                         context2d.fillStyle = "{score_color}"
                         context2d.fillRect(1, index * 10 + 2, maxWidth + 4, 10);
                         context2d.fillStyle = "#000000";
-                        context2d.fillText(text, 3, (index + 1) * 10);
-                    }} else
-                        context2d.fillText(text, 3, (index + 1) * 10);
+                    }}
+                    context2d.fillText(text, 3, (index + 1) * 10);
             }}""")
 
     async def shutdown(self) -> None:
