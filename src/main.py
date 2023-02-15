@@ -271,21 +271,11 @@ class Round:
             expression="canvas => ({width: canvas.width, height: canvas.height});")).values()
         assert canvas_width == canvas_height
 
-        # Calculate the X and Y offsets
-        piece_size: int = canvas_width // 8
-        position_data: dict = {
-            "from_x": (ord(best_move_uci[0]) - ord("a")) * piece_size + piece_size / 2,
-            "from_y": canvas_height - (ord(best_move_uci[1]) - ord("1") + 1) * piece_size + piece_size / 2,
-            "to_x": (ord(best_move_uci[2]) - ord("a")) * piece_size + piece_size / 2,
-            "to_y": canvas_height - (ord(best_move_uci[3]) - ord("1") + 1) * piece_size + piece_size / 2,
-        }
-        # Check for board inversion
-        if board_orientation != "orientation-white":
-            # Invert the X and Y coordinates
-            position_data["from_x"] = canvas_width - position_data["from_x"]
-            position_data["from_y"] = canvas_height - position_data["from_y"]
-            position_data["to_x"] = canvas_width - position_data["to_x"]
-            position_data["to_y"] = canvas_height - position_data["to_y"]
+        # Calculate move positions
+        best_move_position_data: tuple[float, float, float, float] = self.calculate_move_positions(
+            board_orientation=board_orientation, piece_size=canvas_width // 8, uci_move=best_move_uci)
+        ponder_move_position_data: tuple[float, float, float, float] = self.calculate_move_positions(
+            board_orientation=board_orientation, piece_size=canvas_width // 8, uci_move=ponder_move_uci)
 
         # Draw on the canvas
         await shadow_root_element.eval_on_selector(
@@ -296,15 +286,25 @@ class Round:
 
                 // Setup default styles
                 context2d.lineWidth = 4;
-                context2d.strokeStyle = "red";
+                context2d.strokeStyle = "#2ECC71";
                 context2d.globalAlpha = 0.6;
 
                 // Render the best move
                 context2d.beginPath();
-                context2d.moveTo({position_data["from_x"]}, {position_data["from_y"]});
-                context2d.lineTo({position_data["to_x"]}, {position_data["to_y"]});
+                context2d.moveTo({best_move_position_data[0]}, {best_move_position_data[1]});
+                context2d.lineTo({best_move_position_data[2]}, {best_move_position_data[3]});
                 context2d.closePath();
                 context2d.stroke();
+
+                // Render the ponder move
+                if ("{ponder_move_uci}" !== "") {{
+                    context2d.strokeStyle = "#2980B9";
+                    context2d.beginPath();
+                    context2d.moveTo({ponder_move_position_data[0]}, {ponder_move_position_data[1]});
+                    context2d.lineTo({ponder_move_position_data[2]}, {ponder_move_position_data[3]});
+                    context2d.closePath();
+                    context2d.stroke();
+                }}
 
                 // Compute the text array
                 let textArray = [];
@@ -328,14 +328,37 @@ class Round:
                 context2d.fillStyle = "#ffffff";
                 context2d.fillRect(1, 1, maxWidth + 4, maxHeight);
                 context2d.fillStyle = "#000000";
-                for (const [index, text] of textArray.entries())
+                for (const [index, text] of textArray.entries()) {{
                     if (text.includes("score")) {{
                         context2d.fillStyle = "{score_color}"
                         context2d.fillRect(1, index * 10 + 2, maxWidth + 4, 10);
                         context2d.fillStyle = "#000000";
                     }}
                     context2d.fillText(text, 3, (index + 1) * 10);
+                }}
             }}""")
+
+    @staticmethod
+    def calculate_move_positions(board_orientation: str,
+                                 piece_size: int, uci_move: str) -> tuple[float, float, float, float]:
+        if not uci_move:
+            return 0, 0, 0, 0
+        canvas_width = canvas_height = piece_size * 8
+
+        # Calculate the position data
+        from_x: float = (ord(uci_move[0]) - ord("a")) * piece_size + piece_size / 2
+        from_y: float = canvas_height - (ord(uci_move[1]) - ord("1") + 1) * piece_size + piece_size / 2
+        to_x: float = (ord(uci_move[2]) - ord("a")) * piece_size + piece_size / 2
+        to_y: float = canvas_height - (ord(uci_move[3]) - ord("1") + 1) * piece_size + piece_size / 2
+
+        # Handle board inversion
+        if board_orientation != "orientation-white":
+            from_x = canvas_width - from_x
+            from_y = canvas_height - from_y
+            to_x = canvas_width - to_x
+            to_y = canvas_height - to_y
+        # Return the position data
+        return from_x, from_y, to_x, to_y
 
     async def shutdown(self) -> None:
         # Note: do not call self._shadow_root.dispose(), it'll prevent Playwright from closing
