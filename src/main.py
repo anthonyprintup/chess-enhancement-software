@@ -284,30 +284,39 @@ class Round:
                 // Clear the canvas
                 context2d.clearRect(0, 0, canvas.width, canvas.height);
 
-                const drawLine = (lineWidth, color, alpha, position) => {{
+                const previousCompositeOperation = context2d.globalCompositeOperation;
+                const drawArrow = (lineWidth, color, alpha, position) => {{
+                    const deltaX = position.to_x - position.from_x;
+                    const deltaY = position.to_y - position.from_y;
+                    const angle = Math.atan2(deltaY, deltaX);
+                    const headLength = 10;
+
+                    context2d.save();
+                    context2d.lineCap = "round";
                     context2d.lineWidth = lineWidth;
                     context2d.strokeStyle = color;
-                    context2d.fillStyle = color;
                     context2d.globalAlpha = alpha;
 
-                    // Draw the line
+                    // Draw the arrow
                     context2d.beginPath();
                     context2d.moveTo(position.from_x, position.from_y);
                     context2d.lineTo(position.to_x, position.to_y);
-                    context2d.stroke();
-
-                    // Draw the circle
                     context2d.moveTo(position.to_x, position.to_y);
-                    context2d.arc(position.to_x, position.to_y, context2d.lineWidth + 2, 0, Math.PI * 2, false);
-                    context2d.fill();
+                    context2d.lineTo(position.to_x - headLength * Math.cos(angle - Math.PI / 6),
+                                     position.to_y - headLength * Math.sin(angle - Math.PI / 6));
+                    context2d.moveTo(position.to_x, position.to_y);
+                    context2d.lineTo(position.to_x - headLength * Math.cos(angle + Math.PI / 6),
+                                     position.to_y - headLength * Math.sin(angle + Math.PI / 6));
+                    context2d.stroke();
                     context2d.closePath();
+                    context2d.restore();
                 }};
 
                 // Render the ponder move
                 if ("{ponder_move_uci}" !== "")
-                    drawLine(4, "#2980B9", 0.75, {ponder_move_position_data});
+                    drawArrow(4, "#2980B9", 0.75, {ponder_move_position_data});
                 // Render the best move
-                drawLine(4, "#2ECC71", 0.75, {best_move_position_data});
+                drawArrow(4, "#2ECC71", 0.75, {best_move_position_data});
 
                 // Compute the text array
                 let textArray = [];
