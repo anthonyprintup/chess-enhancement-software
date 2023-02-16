@@ -554,6 +554,8 @@ class Lichess(BrowserHandler):
                 continue
             # Set the depth
             chess_round.chess_engine_limits.depth = depth
+            # Queue new engine analysis
+            chess_round.queue_engine_analysis()
             return
 
     def display_board(self, page: Page) -> str:
