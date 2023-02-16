@@ -434,10 +434,13 @@ class Lichess(BrowserHandler):
         # Check to make sure the web socket url matches the filter
         url_pattern: Pattern[str] = re.compile(
             r"wss://socket\d\.lichess\.org/"
-            r"(?:play/\w{12}|watch/\w{8}/(?:white|black))/"
+            r"(?P<round_type>play/\w{12}|watch/\w{8}/(?:white|black))/"
             r"v(?P<socket_version>\d)\?sri=\w{12}(?:&v=(?P<move_number>\d+))?")
         match: re.Match | None = re.match(pattern=url_pattern, string=web_socket.url)
         if match is None:
+            return
+        # Temporarily ignore spectator/analysis modes
+        if not match.group("round_type").startswith("play"):
             return
 
         # Post a notification
