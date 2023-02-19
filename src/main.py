@@ -7,8 +7,9 @@ import re
 from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from functools import cache
 from pathlib import Path
-from typing import Any, AsyncIterator, Pattern, TypeVar
+from typing import Any, AsyncIterator, Pattern, TypeVar, TypeAlias
 
 import chess
 from chess.engine import Limit as ChessEngineLimit, UciProtocol as ChessEngine, popen_uci as open_chess_engine
@@ -19,9 +20,21 @@ BINARIES_PATH: Path = Path.cwd() / "binaries"
 STOCKFISH_PATH: Path = BINARIES_PATH / "stockfish"
 STOCKFISH_ENGINE_PATH: Path = STOCKFISH_PATH / "stockfish-windows-2022-x86-64-avx2.exe"
 STOCKFISH_SETTINGS_PATH: Path = STOCKFISH_PATH / "settings.json"
+SCRIPTS_PATH: Path = Path(__file__).resolve().parent / "scripts"
 
 
 BrowserHandlerType = TypeVar("BrowserHandlerType", bound="BrowserHandler")
+AnalysisResultType: TypeAlias = tuple[chess.engine.AnalysisResult, chess.engine.BestMove]
+
+
+@cache
+def read_scripts() -> dict[str, str]:
+    scripts: dict[str, str] = {}
+    for path in SCRIPTS_PATH.iterdir():
+        if not path.is_file() or not path.suffix == ".js":
+            continue
+        scripts[path.name] = path.read_text()
+    return scripts
 
 
 @dataclass
@@ -44,6 +57,7 @@ class Round:
     chess_engine: ChessEngine
     chess_engine_limits: ChessEngineLimit = field(default_factory=ChessEngineLimit)
     _chess_engine_analysis_task: asyncio.Task | None = None
+    _current_match_data: dict = field(default_factory=dict)
     _takeback_offer_origin: str = ""
     _shadow_root: JSHandle | None = None
 
@@ -79,16 +93,26 @@ class Round:
         # Return the round instance
         return round_instance
 
+    @property
+    def scripts(self) -> dict[str, str]:
+        return read_scripts()
+
     def queue_engine_analysis(self) -> None:
         # Cancel any pending tasks
-        if self._chess_engine_analysis_task is not None and not self._chess_engine_analysis_task.done():
-            self._chess_engine_analysis_task.cancel(msg="New engine analysis task queued.")
+        self.cancel_engine_analysis()
 
         # Check if the engine is ready
         self._chess_engine_analysis_task = asyncio.create_task(self.find_best_move(), name="Best move task")
         self._chess_engine_analysis_task.add_done_callback(self.on_engine_analysis_finished)
 
-    async def find_best_move(self) -> tuple[chess.engine.AnalysisResult, chess.engine.BestMove] | tuple[None, None]:
+    def cancel_engine_analysis(self) -> None:
+        if self._chess_engine_analysis_task is None or self._chess_engine_analysis_task.done():
+            return
+        self._chess_engine_analysis_task.cancel(msg="New engine analysis task queued.")
+        # Clear the current match data (saved for redrawing)
+        self._current_match_data = {}
+
+    async def find_best_move(self) -> AnalysisResultType | tuple[None, None]:
         analysis: chess.engine.AnalysisResult = await self.chess_engine.analysis(
             board=self.chess_board, limit=self.chess_engine_limits)
         try:
@@ -97,9 +121,16 @@ class Round:
             analysis.stop()
             return None, None
 
-    def on_engine_analysis_finished(self, _: asyncio.Future) -> None:
-        # Redraw the canvas
-        asyncio.create_task(self.redraw_canvas())
+    def on_engine_analysis_finished(self, engine_analysis_future: asyncio.Future) -> None:
+        # Check if the engine analysis was cancelled
+        if engine_analysis_future.cancelled():
+            return
+        # Fetch the result (this will raise an exception if an exception was raised in the future)
+        engine_analysis_result: AnalysisResultType = engine_analysis_future.result()
+
+        # Wait for the data to draw on the canvas
+        event_loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
+        asyncio.run_coroutine_threadsafe(self.draw_engine_analysis(analysis_result=engine_analysis_result), event_loop)
 
     async def on_move(self, move_data: dict) -> None:
         uci_move: str = move_data["uci"]
@@ -124,6 +155,8 @@ class Round:
         # Check if this is a valid move
         move: chess.Move = chess.Move.from_uci(uci=uci_move)
         if move in self.chess_board.legal_moves:
+            # Cancel any pending engine analysis
+            self.cancel_engine_analysis()
             # Push the move
             self.chess_board.push(move=move)
             # Clear the canvas
@@ -138,13 +171,18 @@ class Round:
     def on_takeback_offer(self, origin: str) -> None:
         self._takeback_offer_origin = origin
 
+    def on_takeback_cancelled(self) -> None:
+        self._takeback_offer_origin = ""
+
     async def on_takeback_accepted(self) -> None:
         # Determine the current turn
         current_turn: str = "white" if self.chess_board.turn == chess.WHITE else "black"
 
         # Undo moves based on the current turn and takeback offer origin
+        if current_turn == self._takeback_offer_origin:
+            self.chess_board.pop()
         # Handle an edge case for takebacks in computer games (takeback offer not sent)
-        if not self._takeback_offer_origin or current_turn == self._takeback_offer_origin:
+        if not self._takeback_offer_origin and current_turn == chess.COLOR_NAMES[self.player_color]:
             self.chess_board.pop()
         self.chess_board.pop()
 
@@ -156,54 +194,31 @@ class Round:
         # Queue engine analysis
         self.queue_engine_analysis()
 
-    async def create_shadow_root(self) -> None:
+    async def create_shadow_root(self) -> ElementHandle:
         # Create a shadow-root in the board element and add a resize observer
         board_locator: Locator = self.owner_page.locator(selector="cg-board")
-        self._shadow_root = await board_locator.evaluate_handle(
-            expression="""boardElement => {
-                // Create a closed shadow-root
-                const shadowRoot = boardElement.attachShadow({mode: "closed"});
-                shadowRoot.innerHTML = `
-                    <canvas id="drawing-canvas" style="
-                        position: relative;
-                        z-index: 3;
-                        pointer-events: none;"></canvas>
-                    <slot></slot>`;
+        self._shadow_root = await board_locator.evaluate_handle(expression=self.scripts["create-shadow-root.js"])
 
-                // Fetch the canvas element
-                const canvasElement = shadowRoot.querySelector("canvas");
-                canvasElement.width = boardElement.clientWidth;
-                canvasElement.height = boardElement.clientHeight;
+        shadow_root_element: ElementHandle | None = self._shadow_root.as_element()
+        assert shadow_root_element is not None
+        return shadow_root_element
 
-                // Attach a resize observer to the board element
-                new ResizeObserver(entries => entries.forEach(entry => {
-                    // Set the new size
-                    const contentRect = entry.contentRect;
-                    canvasElement.width = contentRect.width;
-                    canvasElement.height = contentRect.height;
-
-                    // Call the redraw_canvas binding
-                    window.redraw_canvas();
-                })).observe(boardElement);
-                // Return the shadow-root for later access
-                return shadowRoot;
-            }""")
-
-    async def try_rebuild_shadow_root(self) -> None:
+    async def try_rebuild_shadow_root(self) -> ElementHandle:
+        # Check if the shadow root needs to be built
         if self._shadow_root is None:
-            await self.create_shadow_root()
-            return
+            return await self.create_shadow_root()
 
         shadow_root_element: ElementHandle | None = self._shadow_root.as_element()
         assert shadow_root_element is not None
 
-        # Check if the shadow-root is connected to the DOM
+        # Check if the current shadow-root is connected to the DOM
         is_connected: bool = await shadow_root_element.evaluate(expression="shadowRoot => shadowRoot.isConnected;")
         if not is_connected:
             # Rebuild the shadow-root
             await self._shadow_root.dispose()
             self._shadow_root = None
-            await self.create_shadow_root()
+            return await self.create_shadow_root()
+        return shadow_root_element
 
     async def clear_canvas(self) -> None:
         # Cover an edge case when resize events are fired from the JS side
@@ -219,31 +234,12 @@ class Round:
                 context2d.clearRect(0, 0, canvas.width, canvas.height);
             }""")
 
-    async def redraw_canvas(self) -> None:
-        # Cover an edge case when resize events are fired from the JS side
-        if self._shadow_root is None:
-            return
-
+    async def draw_engine_analysis(self, analysis_result: AnalysisResultType) -> None:
         # Rebuild the shadow root if it's required
-        await self.try_rebuild_shadow_root()
+        shadow_root_element: ElementHandle = await self.try_rebuild_shadow_root()
 
-        shadow_root_element: ElementHandle | None = self._shadow_root.as_element()
-        assert shadow_root_element is not None
-
-        # Check if the engine has calculated the best move
-        if self._chess_engine_analysis_task is None:
-            return
-        if not self._chess_engine_analysis_task.done():
-            return
-
-        # Fetch the results
-        # TODO: race condition possible here (TypeError: cannot unpack non-iterable NoneType object)
-        # TODO: assuming that a move was sent while in the function, so the result was changed (use a lock?)
-        analysis, best_move = self._chess_engine_analysis_task.result()
-        if best_move is None:
-            return
+        analysis, best_move = analysis_result
         assert best_move.move is not None
-
         best_move_uci: str = best_move.move.uci()
         ponder_move_uci: str = best_move.ponder.uci() if best_move.ponder is not None else ""
 
@@ -252,20 +248,14 @@ class Round:
         score: str = f"{player_score.score()}" if player_score.mate() is None else f"#{player_score.mate()}"
 
         # Determine the background color to use for the score
-        score_color: str
+        score_color: str = "#BDC3C7"
         if player_score.is_mate():
             score_color = "#2ECC71" if player_score.mate() >= 1 else "#E74C3C"
         elif player_score.score() != 0:
             score_color = "#2ECC71" if player_score.score() > 0 else "#E74C3C"
-        else:
-            score_color = "#BDC3C7"
 
         # Calculate the move positions
-        board_orientation: str = await shadow_root_element.evaluate(
-            expression="""shadowRoot => {
-                const container = shadowRoot.host.parentNode.parentNode;
-                return Array.from(container.classList).find(className => className.includes("orientation"));
-            }""")
+        board_orientation: str = await shadow_root_element.evaluate(expression=self.scripts["get-board-orientation.js"])
         canvas_width, canvas_height = (await shadow_root_element.eval_on_selector(
             selector="#drawing-canvas",
             expression="canvas => ({width: canvas.width, height: canvas.height});")).values()
@@ -278,77 +268,59 @@ class Round:
             board_orientation=board_orientation, piece_size=canvas_width // 8, uci_move=ponder_move_uci)
 
         # Draw on the canvas
+        match_data: dict = {
+            "uiOffsets": {
+                "x": 1,
+                "y": 1
+            },
+            "score": score,
+            "scoreColor": score_color,
+            "depth": self.chess_engine_limits.depth,
+            "bestMove": {
+                "uci": best_move_uci,
+                "coordinates": best_move_position_data,
+                "color": "#2ECC71"
+            },
+            "ponderMove": {
+                "uci": ponder_move_uci,
+                "coordinates": ponder_move_position_data,
+                "color": "#2980B9"
+            } if best_move.ponder else None
+        }
+        self._current_match_data = match_data
         await shadow_root_element.eval_on_selector(
-            selector="#drawing-canvas", expression=f"""canvas => {{
-                const context2d = canvas.getContext("2d");
-                // Clear the canvas
-                context2d.clearRect(0, 0, canvas.width, canvas.height);
+            selector="#drawing-canvas", expression=self.scripts["draw-data.js"], arg=match_data)
 
-                const previousCompositeOperation = context2d.globalCompositeOperation;
-                const drawArrow = (lineWidth, color, alpha, position) => {{
-                    const deltaX = position.to_x - position.from_x;
-                    const deltaY = position.to_y - position.from_y;
-                    const angle = Math.atan2(deltaY, deltaX);
-                    const headLength = 10;
+    async def redraw_existing_engine_analysis(self, new_piece_size: int) -> None:
+        if not self._current_match_data:
+            return
+        # Avoid attempting to create duplicate shadow roots
+        if self._shadow_root is None:
+            return
 
-                    context2d.save();
-                    context2d.lineCap = "round";
-                    context2d.lineWidth = lineWidth;
-                    context2d.strokeStyle = color;
-                    context2d.globalAlpha = alpha;
+        shadow_root_element: ElementHandle = await self.try_rebuild_shadow_root()
+        board_orientation: str = await shadow_root_element.evaluate(expression=self.scripts["get-board-orientation.js"])
 
-                    // Draw the arrow
-                    context2d.beginPath();
-                    context2d.moveTo(position.from_x, position.from_y);
-                    context2d.lineTo(position.to_x, position.to_y);
-                    context2d.moveTo(position.to_x, position.to_y);
-                    context2d.lineTo(position.to_x - headLength * Math.cos(angle - Math.PI / 6),
-                                     position.to_y - headLength * Math.sin(angle - Math.PI / 6));
-                    context2d.moveTo(position.to_x, position.to_y);
-                    context2d.lineTo(position.to_x - headLength * Math.cos(angle + Math.PI / 6),
-                                     position.to_y - headLength * Math.sin(angle + Math.PI / 6));
-                    context2d.stroke();
-                    context2d.closePath();
-                    context2d.restore();
-                }};
+        # Handle an edge case where the new piece size is 0 after the board is flipped (observer callback)
+        if not new_piece_size:
+            canvas_width, canvas_height = (await shadow_root_element.eval_on_selector(
+                selector="#drawing-canvas",
+                expression="canvas => ({width: canvas.width, height: canvas.height});")).values()
+            assert canvas_width == canvas_height
+            new_piece_size = canvas_width // 8
 
-                // Render the ponder move
-                if ("{ponder_move_uci}" !== "")
-                    drawArrow(4, "#2980B9", 0.75, {ponder_move_position_data});
-                // Render the best move
-                drawArrow(4, "#2ECC71", 0.75, {best_move_position_data});
+        # Recalculate the move positions
+        self._current_match_data["bestMove"]["coordinates"] = self.calculate_move_positions(
+            board_orientation=board_orientation, piece_size=new_piece_size,
+            uci_move=self._current_match_data["bestMove"]["uci"])
+        if self._current_match_data["ponderMove"]:
+            self._current_match_data["ponderMove"]["coordinates"] = self.calculate_move_positions(
+                board_orientation=board_orientation, piece_size=new_piece_size,
+                uci_move=self._current_match_data["ponderMove"]["uci"])
 
-                // Compute the text array
-                let textArray = [];
-                textArray.push("best: {best_move_uci}");
-                if ("{ponder_move_uci}" !== "")
-                    textArray.push("ponder: {ponder_move_uci}");
-                textArray.push("score: {score}");
-                textArray.push("depth: {self.chess_engine_limits.depth}");
-
-                // Calculate the bounding box
-                let maxWidth = 0, maxHeight = 0;
-                for (const text of textArray) {{
-                    const textSize = context2d.measureText(text);
-                    if (textSize.width > maxWidth)
-                        maxWidth = textSize.width;
-                    maxHeight += 10 + 1;
-                }}
-
-                // Render the text
-                context2d.globalAlpha = 1;
-                context2d.fillStyle = "#ffffff";
-                context2d.fillRect(1, 1, maxWidth + 4, maxHeight);
-                context2d.fillStyle = "#000000";
-                for (const [index, text] of textArray.entries()) {{
-                    if (text.includes("score")) {{
-                        context2d.fillStyle = "{score_color}"
-                        context2d.fillRect(1, index * 10 + 2, maxWidth + 4, 10);
-                        context2d.fillStyle = "#000000";
-                    }}
-                    context2d.fillText(text, 3, (index + 1) * 10);
-                }}
-            }}""")
+        # Redraw the data
+        await shadow_root_element.eval_on_selector(
+            selector="#drawing-canvas", expression=self.scripts["draw-data.js"], arg=self._current_match_data)
 
     @staticmethod
     def calculate_move_positions(board_orientation: str,
@@ -420,10 +392,11 @@ class Lichess(BrowserHandler):
         await page.expose_binding("set_depth", lambda source, depth: self.set_depth(source["page"], depth))
         await page.expose_binding("display_board", lambda source: self.display_board(source["page"]))
         # Expose canvas bindings
-        await page.expose_binding("redraw_canvas", lambda source: self.redraw_canvas(source["page"]))
+        await page.expose_binding("redraw_existing_engine_analysis",
+                                  lambda source, piece_size: self.redraw_existing_engine_analysis(
+                                      source["page"], piece_size))
         # Register an event listener for websocket events
         page.on("websocket", functools.partial(self.on_websocket_created, page=page))
-        # TODO: shutdown round instances on reload/redirect
 
     async def on_context_close(self, _: BrowserContext) -> None:
         for game_round in self.chess_rounds.values():
@@ -500,13 +473,18 @@ class Lichess(BrowserHandler):
             move_data: dict = parsed_payload["d"]
             await chess_round.on_move(move_data=move_data)
         elif message_type == "takebackOffers":
-            takeback_data: dict = parsed_payload["d"]
-            chess_round.on_takeback_offer(origin=next(iter(takeback_data)))
+            takeback_data: dict | None = parsed_payload["d"]
+            if not takeback_data:
+                chess_round.on_takeback_cancelled()
+            else:
+                chess_round.on_takeback_offer(origin=next(iter(takeback_data)))
         elif message_type == "reload":
             reload_data: dict | None = parsed_payload["d"]
             if reload_data is None:  # avoid an edge case for when a rematch is accepted
                 await chess_round.on_takeback_accepted()
         elif message_type == "endData":
+            # Cancel any pending engine analysis
+            chess_round.cancel_engine_analysis()
             # Clear the canvas
             await chess_round.clear_canvas()
             # Shutdown the chess round instance
@@ -568,12 +546,12 @@ class Lichess(BrowserHandler):
             return str(chess_round.chess_board)
         return ""
 
-    async def redraw_canvas(self, page: Page) -> None:
+    async def redraw_existing_engine_analysis(self, page: Page, new_piece_size: int) -> None:
         round_identifier: str = page.url[page.url.rfind("/") + 1:]
         for web_socket_url, chess_round in self.chess_rounds.items():
             if round_identifier not in web_socket_url:
                 continue
-            await chess_round.redraw_canvas()
+            await chess_round.redraw_existing_engine_analysis(new_piece_size=new_piece_size)
             return
 
     async def perform_round_cleanup(self, socket_identifier: str) -> None:
