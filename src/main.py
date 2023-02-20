@@ -235,11 +235,9 @@ class Round:
             }""")
 
     async def draw_engine_analysis(self, analysis_result: AnalysisResultType) -> None:
-        # Rebuild the shadow root if it's required
-        shadow_root_element: ElementHandle = await self.try_rebuild_shadow_root()
-
         analysis, best_move = analysis_result
         assert best_move.move is not None
+
         best_move_uci: str = best_move.move.uci()
         ponder_move_uci: str = best_move.ponder.uci() if best_move.ponder is not None else ""
 
@@ -253,6 +251,9 @@ class Round:
             score_color = "#2ECC71" if player_score.mate() >= 1 else "#E74C3C"
         elif player_score.score() != 0:
             score_color = "#2ECC71" if player_score.score() > 0 else "#E74C3C"
+
+        # Rebuild the shadow root if it's required
+        shadow_root_element: ElementHandle = await self.try_rebuild_shadow_root()
 
         # Calculate the move positions
         board_orientation: str = await shadow_root_element.evaluate(expression=self.scripts["get-board-orientation.js"])
@@ -285,7 +286,8 @@ class Round:
                 "uci": ponder_move_uci,
                 "coordinates": ponder_move_position_data,
                 "color": "#2980B9"
-            } if best_move.ponder else None
+            } if best_move.ponder else None,
+            "pv": [move.uci() for move in analysis.info["pv"]]
         }
         self._current_match_data = match_data
         await shadow_root_element.eval_on_selector(
