@@ -86,10 +86,6 @@ class Round:
         # Create the shadow dom
         await round_instance.create_shadow_root()
 
-        # If we are to make the first move then queue up engine analysis
-        if player_color == "white":
-            round_instance.queue_engine_analysis()
-
         # Return the round instance
         return round_instance
 
@@ -358,6 +354,7 @@ class Round:
 @dataclass
 class Lichess(BrowserHandler):
     chess_rounds: dict[str, Round] = field(default_factory=dict)
+    _round_cleanup_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     def __post_init__(self) -> None:
         self.browser_context.on(event="page", f=self.on_page)
@@ -555,16 +552,17 @@ class Lichess(BrowserHandler):
             return
 
     async def perform_round_cleanup(self, socket_identifier: str) -> None:
-        # Check if the game has already ended
-        if socket_identifier not in self.chess_rounds:
-            return
+        async with self._round_cleanup_lock:
+            # Check if the game has already ended
+            if socket_identifier not in self.chess_rounds:
+                return
 
-        # Push a notification
-        print(f"Shutting down a game: {socket_identifier}")
+            # Push a notification
+            print(f"Shutting down a game: {socket_identifier}")
 
-        # Perform cleanup
-        await self.chess_rounds[socket_identifier].shutdown()
-        del self.chess_rounds[socket_identifier]
+            # Perform cleanup
+            await self.chess_rounds[socket_identifier].shutdown()
+            del self.chess_rounds[socket_identifier]
 
     async def on_websocket_closed(self, web_socket: WebSocket) -> None:
         await self.perform_round_cleanup(socket_identifier=web_socket.url)
