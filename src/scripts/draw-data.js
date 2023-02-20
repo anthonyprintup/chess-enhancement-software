@@ -72,7 +72,7 @@
     pushText("depth", matchData.depth);
 
     // Render the text
-    context2d.globalAlpha = .8;
+    context2d.globalAlpha = 1;
     // noinspection JSUnusedLocalSymbols
     for (const {_, backgroundColor, yOffset, height} of textArray) {
         context2d.fillStyle = backgroundColor;
