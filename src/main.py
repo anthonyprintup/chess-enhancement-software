@@ -60,6 +60,7 @@ class Round:
     _current_match_data: dict = field(default_factory=dict)
     _takeback_offer_origin: str = ""
     _shadow_root: JSHandle | None = None
+    _canvas_height_offset: int = 44  # how much to expand the height of the canvas by (for the engine data)
 
     @staticmethod
     async def create(page: Page, player_color: str, move_data: list[dict]) -> Round:
@@ -197,7 +198,8 @@ class Round:
     async def create_shadow_root(self) -> ElementHandle:
         # Create a shadow-root in the board element and add a resize observer
         board_locator: Locator = self.owner_page.locator(selector="cg-board")
-        self._shadow_root = await board_locator.evaluate_handle(expression=self.scripts["create-shadow-root.js"])
+        self._shadow_root = await board_locator.evaluate_handle(
+            expression=self.scripts["create-shadow-root.js"], arg=self._canvas_height_offset)
 
         shadow_root_element: ElementHandle | None = self._shadow_root.as_element()
         assert shadow_root_element is not None
@@ -260,19 +262,19 @@ class Round:
         canvas_width, canvas_height = (await shadow_root_element.eval_on_selector(
             selector="#drawing-canvas",
             expression="canvas => ({width: canvas.width, height: canvas.height});")).values()
-        assert canvas_width == canvas_height
+        piece_size: int = canvas_width // 8
 
         # Calculate move positions
         best_move_position_data: dict[str, float] = self.calculate_move_positions(
-            board_orientation=board_orientation, piece_size=canvas_width // 8, uci_move=best_move_uci)
+            board_orientation=board_orientation, piece_size=piece_size, uci_move=best_move_uci)
         ponder_move_position_data: dict[str, float] = self.calculate_move_positions(
-            board_orientation=board_orientation, piece_size=canvas_width // 8, uci_move=ponder_move_uci)
+            board_orientation=board_orientation, piece_size=piece_size, uci_move=ponder_move_uci)
 
         # Draw on the canvas
         match_data: dict = {
             "uiOffsets": {
-                "x": 1,
-                "y": 1
+                "x": 0,
+                "y": canvas_height - self._canvas_height_offset
             },
             "score": score,
             "scoreColor": score_color,
@@ -293,7 +295,7 @@ class Round:
         await shadow_root_element.eval_on_selector(
             selector="#drawing-canvas", expression=self.scripts["draw-data.js"], arg=match_data)
 
-    async def redraw_existing_engine_analysis(self, new_piece_size: int) -> None:
+    async def redraw_existing_engine_analysis(self, new_board_width: int) -> None:
         if not self._current_match_data:
             return
         # Avoid attempting to create duplicate shadow roots
@@ -304,20 +306,20 @@ class Round:
         board_orientation: str = await shadow_root_element.evaluate(expression=self.scripts["get-board-orientation.js"])
 
         # Handle an edge case where the new piece size is 0 after the board is flipped (observer callback)
-        if not new_piece_size:
+        piece_size: int = new_board_width // 8
+        if not new_board_width:
             canvas_width, canvas_height = (await shadow_root_element.eval_on_selector(
                 selector="#drawing-canvas",
                 expression="canvas => ({width: canvas.width, height: canvas.height});")).values()
-            assert canvas_width == canvas_height
-            new_piece_size = canvas_width // 8
+            piece_size = canvas_width // 8
 
         # Recalculate the move positions
         self._current_match_data["bestMove"]["coordinates"] = self.calculate_move_positions(
-            board_orientation=board_orientation, piece_size=new_piece_size,
+            board_orientation=board_orientation, piece_size=piece_size,
             uci_move=self._current_match_data["bestMove"]["uci"])
         if self._current_match_data["ponderMove"]:
             self._current_match_data["ponderMove"]["coordinates"] = self.calculate_move_positions(
-                board_orientation=board_orientation, piece_size=new_piece_size,
+                board_orientation=board_orientation, piece_size=piece_size,
                 uci_move=self._current_match_data["ponderMove"]["uci"])
 
         # Redraw the data
@@ -548,12 +550,12 @@ class Lichess(BrowserHandler):
             return str(chess_round.chess_board)
         return ""
 
-    async def redraw_existing_engine_analysis(self, page: Page, new_piece_size: int) -> None:
+    async def redraw_existing_engine_analysis(self, page: Page, new_board_width: int) -> None:
         round_identifier: str = page.url[page.url.rfind("/") + 1:]
         for web_socket_url, chess_round in self.chess_rounds.items():
             if round_identifier not in web_socket_url:
                 continue
-            await chess_round.redraw_existing_engine_analysis(new_piece_size=new_piece_size)
+            await chess_round.redraw_existing_engine_analysis(new_board_width=new_board_width)
             return
 
     async def perform_round_cleanup(self, socket_identifier: str) -> None:
