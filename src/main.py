@@ -105,6 +105,7 @@ class Round:
         if self._chess_engine_analysis_task is None or self._chess_engine_analysis_task.done():
             return
         self._chess_engine_analysis_task.cancel(msg="New engine analysis task queued.")
+        self._chess_engine_analysis_task = None
         # Clear the current match data (saved for redrawing)
         self._current_match_data = {}
 
@@ -160,6 +161,9 @@ class Round:
 
             # Queue engine analysis
             if not self.chess_board.is_game_over():
+                # Wait for the engine to be ready
+                await self.chess_engine.ping()
+                # Queue engine analysis
                 self.queue_engine_analysis()
         else:
             print(f"Attempted to perform an invalid move: {move=}, {move_data=}")
@@ -343,8 +347,7 @@ class Round:
     # Note: do not call self._shadow_root.dispose(), it'll prevent Playwright from closing
     async def shutdown(self) -> None:
         # Cancel the engine analysis task
-        if self._chess_engine_analysis_task is not None and not self._chess_engine_analysis_task.done():
-            self._chess_engine_analysis_task.cancel(msg="Shutting down.")
+        self.cancel_engine_analysis()
         # Stop the engine process
         await self.chess_engine.quit()
         self.transport.close()
