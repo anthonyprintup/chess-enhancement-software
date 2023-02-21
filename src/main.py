@@ -56,20 +56,22 @@ class Round:
     transport: asyncio.SubprocessTransport
     chess_engine: ChessEngine
     chess_engine_limits: ChessEngineLimit = field(default_factory=ChessEngineLimit)
+    # Secret variables
     _chess_engine_analysis_task: asyncio.Task | None = None
-    _current_match_data: dict = field(default_factory=dict)
     _takeback_offer_origin: str = ""
-    _shadow_root: JSHandle | None = None
+    # UI variables
     _canvas_height_offset: int = 44  # how much to expand the height of the canvas by (for the engine data)
+    _shadow_root: JSHandle | None = None
+    _current_match_data: dict = field(default_factory=dict)
 
     @staticmethod
-    async def create(page: Page, player_color: str, move_data: list[dict]) -> Round:
+    async def create(page: Page, player_color: chess.Color, move_data: list[dict]) -> Round:
         # Setup the chess board
         chess_board: chess.Board = chess.Board(fen=move_data[0]["fen"])
         for move in move_data[1:]:
             chess_board.push_uci(move["uci"])
 
-        # Read the preferred settings from disk
+        # Read the preferred settings from disk (note: do not cache)
         settings: dict = json.loads(STOCKFISH_SETTINGS_PATH.read_text())
 
         # Spawn an engine instance and configure the engine
@@ -77,15 +79,20 @@ class Round:
         await engine.configure(options=settings["uci-settings"])
 
         # Create a round instance
-        round_instance: Round = Round(owner_page=page,
-                                      player_color=chess.WHITE if player_color == "white" else chess.BLACK,
-                                      chess_board=chess_board, transport=transport, chess_engine=engine)
+        round_instance: Round = Round(owner_page=page, player_color=player_color, chess_board=chess_board,
+                                      transport=transport, chess_engine=engine)
 
         # Configure the engine limits
         round_instance.chess_engine_limits.depth = settings["engine-limits"]["depth"]
 
         # Create the shadow dom
         await round_instance.create_shadow_root()
+
+        # Queue engine analysis if the user begins the match
+        if player_color == chess.WHITE:
+            # Wait for the engine to be ready
+            await engine.ping()
+            round_instance.queue_engine_analysis()
 
         # Return the round instance
         return round_instance
@@ -236,6 +243,18 @@ class Round:
                 context2d.clearRect(0, 0, canvas.width, canvas.height);
             }""")
 
+    async def get_board_data(self, shadow_root_element: ElementHandle) -> tuple[chess.Color, int, int, int]:
+        # Determine the board orientation
+        board_orientation: chess.Color = chess.WHITE if await shadow_root_element.evaluate(
+            expression=self.scripts["get-board-orientation.js"]) == "orientation-white" else chess.BLACK
+        # Determine the board (canvas) dimensions
+        canvas_width, canvas_height = (await shadow_root_element.eval_on_selector(
+            selector="#drawing-canvas",
+            expression="canvas => ({width: canvas.width, height: canvas.height});")).values()
+        piece_size: int = canvas_width // 8
+        # Return the results
+        return board_orientation, canvas_width, canvas_height, piece_size
+
     async def draw_engine_analysis(self, analysis_result: AnalysisResultType) -> None:
         analysis, best_move = analysis_result
         assert best_move.move is not None
@@ -257,18 +276,9 @@ class Round:
         # Rebuild the shadow root if it's required
         shadow_root_element: ElementHandle = await self.try_rebuild_shadow_root()
 
-        # Calculate the move positions
-        board_orientation: str = await shadow_root_element.evaluate(expression=self.scripts["get-board-orientation.js"])
-        canvas_width, canvas_height = (await shadow_root_element.eval_on_selector(
-            selector="#drawing-canvas",
-            expression="canvas => ({width: canvas.width, height: canvas.height});")).values()
-        piece_size: int = canvas_width // 8
-
-        # Calculate move positions
-        best_move_position_data: dict[str, float] = self.calculate_move_positions(
-            board_orientation=board_orientation, piece_size=piece_size, uci_move=best_move_uci)
-        ponder_move_position_data: dict[str, float] = self.calculate_move_positions(
-            board_orientation=board_orientation, piece_size=piece_size, uci_move=ponder_move_uci)
+        # Fetch board data
+        board_orientation, canvas_width, canvas_height, piece_size = await self.get_board_data(
+            shadow_root_element=shadow_root_element)
 
         # Draw on the canvas
         match_data: dict = {
@@ -281,12 +291,12 @@ class Round:
             "depth": self.chess_engine_limits.depth,
             "bestMove": {
                 "uci": best_move_uci,
-                "coordinates": best_move_position_data,
+                "coordinates": self.calculate_move_positions(board_orientation, piece_size, best_move_uci),
                 "color": "#2ECC71"
             },
             "ponderMove": {
                 "uci": ponder_move_uci,
-                "coordinates": ponder_move_position_data,
+                "coordinates": self.calculate_move_positions(board_orientation, piece_size, ponder_move_uci),
                 "color": "#2980B9"
             } if best_move.ponder else None,
             "pv": [move.uci() for move in analysis.info["pv"]]
@@ -303,15 +313,12 @@ class Round:
             return
 
         shadow_root_element: ElementHandle = await self.try_rebuild_shadow_root()
-        board_orientation: str = await shadow_root_element.evaluate(expression=self.scripts["get-board-orientation.js"])
-
+        # Fetch board data
+        board_orientation, canvas_width, canvas_height, piece_size = await self.get_board_data(
+            shadow_root_element=shadow_root_element)
         # Handle an edge case where the new piece size is 0 after the board is flipped (observer callback)
-        piece_size: int = new_board_width // 8
-        if not new_board_width:
-            canvas_width, canvas_height = (await shadow_root_element.eval_on_selector(
-                selector="#drawing-canvas",
-                expression="canvas => ({width: canvas.width, height: canvas.height});")).values()
-            piece_size = canvas_width // 8
+        if new_board_width:
+            assert new_board_width == canvas_width
 
         # Recalculate the move positions
         self._current_match_data["bestMove"]["coordinates"] = self.calculate_move_positions(
@@ -327,10 +334,8 @@ class Round:
             selector="#drawing-canvas", expression=self.scripts["draw-data.js"], arg=self._current_match_data)
 
     @staticmethod
-    def calculate_move_positions(board_orientation: str,
+    def calculate_move_positions(board_orientation: chess.Color,
                                  piece_size: int, uci_move: str) -> dict[str, float]:
-        if not uci_move:
-            return dict()
         canvas_width = canvas_height = piece_size * 8
 
         # Calculate the position data
@@ -340,7 +345,7 @@ class Round:
         to_y: float = canvas_height - (ord(uci_move[3]) - ord("1") + 1) * piece_size + piece_size / 2
 
         # Handle board inversion
-        if board_orientation != "orientation-white":
+        if board_orientation == chess.BLACK:
             from_x = canvas_width - from_x
             from_y = canvas_height - from_y
             to_x = canvas_width - to_x
@@ -394,7 +399,6 @@ class Lichess(BrowserHandler):
         # Expose engine bindings
         await page.expose_binding("get_best_move", lambda source, depth=0: self.get_best_move(source["page"], depth))
         await page.expose_binding("set_depth", lambda source, depth: self.set_depth(source["page"], depth))
-        await page.expose_binding("display_board", lambda source: self.display_board(source["page"]))
         # Expose canvas bindings
         await page.expose_binding("redraw_existing_engine_analysis",
                                   lambda source, piece_size: self.redraw_existing_engine_analysis(
@@ -439,7 +443,7 @@ class Lichess(BrowserHandler):
             return
 
         # Add a new round instance
-        player_color: str = game_data["player"]["color"]
+        player_color: chess.Color = chess.WHITE if game_data["player"]["color"] == "white" else chess.BLACK
         move_data: list[dict] = game_data.get("steps", game_data.get("treeParts", []))
         self.chess_rounds[web_socket.url] = await Round.create(
             page=page, player_color=player_color, move_data=move_data)
@@ -510,12 +514,13 @@ class Lichess(BrowserHandler):
 
             # Calculate the best move
             analysis, best_move = await chess_round.find_best_move()
+
             # Revert the depth
             if depth and depth != previous_depth:
                 chess_round.chess_engine_limits.depth = previous_depth
 
-            assert analysis is not None
-            assert best_move is not None
+            if analysis is None or best_move is None:
+                return "analysis cancelled"
             assert best_move.move is not None
 
             # Revert the depth
@@ -539,16 +544,6 @@ class Lichess(BrowserHandler):
             # Queue new engine analysis
             chess_round.queue_engine_analysis()
             return
-
-    def display_board(self, page: Page) -> str:
-        # Find the correct socket
-        round_identifier: str = page.url[page.url.rfind("/") + 1:]
-        for web_socket_url, chess_round in self.chess_rounds.items():
-            if round_identifier not in web_socket_url:
-                continue
-            # Set the depth
-            return str(chess_round.chess_board)
-        return ""
 
     async def redraw_existing_engine_analysis(self, page: Page, new_board_width: int) -> None:
         round_identifier: str = page.url[page.url.rfind("/") + 1:]
@@ -586,4 +581,4 @@ async def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(asyncio.run(main()))
+    raise SystemExit(asyncio.run(main(), debug=True))
