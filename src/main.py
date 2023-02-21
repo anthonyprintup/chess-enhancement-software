@@ -58,7 +58,7 @@ class Round:
     chess_engine_limits: ChessEngineLimit = field(default_factory=ChessEngineLimit)
     # Secret variables
     _chess_engine_analysis_task: asyncio.Task | None = None
-    _takeback_offer_origin: str = ""
+    _takeback_offer_origin: chess.Color | None = None
     # UI variables
     _canvas_height_offset: int = 44  # how much to expand the height of the canvas by (for the engine data)
     _shadow_root: JSHandle | None = None
@@ -176,26 +176,26 @@ class Round:
         else:
             print(f"Attempted to perform an invalid move: {move=}, {move_data=}")
 
-    def on_takeback_offer(self, origin: str) -> None:
+    def on_takeback_offer(self, origin: chess.Color) -> None:
         self._takeback_offer_origin = origin
 
     def on_takeback_cancelled(self) -> None:
-        self._takeback_offer_origin = ""
+        self._takeback_offer_origin = None
 
     async def on_takeback_accepted(self) -> None:
         # Determine the current turn
-        current_turn: str = "white" if self.chess_board.turn == chess.WHITE else "black"
+        current_turn: chess.Color = self.chess_board.turn
 
         # Undo moves based on the current turn and takeback offer origin
-        if current_turn == self._takeback_offer_origin:
+        if self._takeback_offer_origin == current_turn:
             self.chess_board.pop()
         # Handle an edge case for takebacks in computer games (takeback offer not sent)
-        if not self._takeback_offer_origin and current_turn == chess.COLOR_NAMES[self.player_color]:
+        if self._takeback_offer_origin is None and current_turn == self.player_color:
             self.chess_board.pop()
         self.chess_board.pop()
 
         # Clear the takeback offer origin variable
-        self._takeback_offer_origin = ""
+        self._takeback_offer_origin = None
 
         # Clear the canvas
         await self.clear_canvas()
@@ -485,7 +485,8 @@ class Lichess(BrowserHandler):
             if not takeback_data:
                 chess_round.on_takeback_cancelled()
             else:
-                chess_round.on_takeback_offer(origin=next(iter(takeback_data)))
+                turn_origin: chess.Color = chess.WHITE if next(iter(takeback_data)) == "white" else chess.BLACK
+                chess_round.on_takeback_offer(origin=turn_origin)
         elif message_type == "reload":
             reload_data: dict | None = parsed_payload["d"]
             if reload_data is None:  # avoid an edge case for when a rematch is accepted
