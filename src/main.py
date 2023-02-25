@@ -416,7 +416,6 @@ class Lichess(BrowserHandler):
 
     async def on_page(self, page: Page) -> None:
         # Expose engine bindings
-        await page.expose_binding("get_best_move", lambda source, depth=0: self.get_best_move(source["page"], depth))
         await page.expose_binding("set_depth", lambda source, depth: self.set_depth(source["page"], depth))
         # Expose canvas bindings
         await page.expose_binding("redraw_existing_engine_analysis",
@@ -517,41 +516,6 @@ class Lichess(BrowserHandler):
             await chess_round.clear_canvas()
             # Shutdown the chess round instance
             await self.perform_round_cleanup(socket_identifier=socket_identifier)
-
-    async def get_best_move(self, page: Page, depth: int) -> str:
-        # Find the correct socket
-        round_identifier: str = page.url[page.url.rfind("/") + 1:]
-        for web_socket_url, chess_round in self.chess_rounds.items():
-            if round_identifier not in web_socket_url:
-                continue
-
-            # Set the depth
-            assert chess_round.chess_engine_limits.depth is not None
-            previous_depth: int = chess_round.chess_engine_limits.depth
-            if depth and depth != previous_depth:
-                assert depth > 0
-                chess_round.chess_engine_limits.depth = depth
-
-            # Calculate the best move
-            analysis, best_move = await chess_round.find_best_move()
-
-            # Revert the depth
-            if depth and depth != previous_depth:
-                chess_round.chess_engine_limits.depth = previous_depth
-
-            if analysis is None or best_move is None:
-                return "analysis cancelled"
-            assert best_move.move is not None
-
-            # Revert the depth
-            if depth and depth != previous_depth:
-                chess_round.chess_engine_limits.depth = previous_depth
-
-            # Return the result
-            ponder_move_info: str = f" ponder move={best_move.ponder.uci()}" if best_move.ponder is not None else ""
-            score: chess.engine.PovScore = analysis.info["score"]
-            return f"best move={best_move.move.uci()}{ponder_move_info} score={score}"
-        return "couldn't find a game"
 
     def set_depth(self, page: Page, depth: int) -> None:
         # Find the correct socket
