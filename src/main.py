@@ -72,7 +72,7 @@ class Round:
     _current_match_data: dict = field(default_factory=dict)
 
     @staticmethod
-    async def create(page: Page, player_color: chess.Color, move_data: list[dict]) -> Round:
+    async def create(page: Page, player_color: chess.Color, move_data: list[dict], time_increment: float) -> Round:
         # Setup the chess board
         chess_board: chess.Board = chess.Board(fen=move_data[0]["fen"])
         for move in move_data[1:]:
@@ -88,6 +88,9 @@ class Round:
         # Create a round instance
         round_instance: Round = Round(owner_page=page, player_color=player_color, chess_board=chess_board,
                                       transport=transport, chess_engine=engine)
+        # Setup time increments
+        round_instance.chess_engine_limits.white_inc = time_increment
+        round_instance.chess_engine_limits.black_inc = time_increment
 
         # Configure the settings
         round_instance.update_settings(settings={
@@ -500,9 +503,10 @@ class Lichess(BrowserHandler):
 
         # Add a new round instance
         player_color: chess.Color = chess.WHITE if game_data["player"]["color"] == "white" else chess.BLACK
+        time_increment: float = float(game_data["clock"]["increment"]) if "clock" in game_data else 0.0
         move_data: list[dict] = game_data.get("steps", game_data.get("treeParts", []))
         self.chess_rounds[web_socket.url] = await Round.create(
-            page=page, player_color=player_color, move_data=move_data)
+            page=page, player_color=player_color, move_data=move_data, time_increment=time_increment)
 
         # Register web socket events
         web_socket.on("framereceived", functools.partial(self.on_websocket_message,
