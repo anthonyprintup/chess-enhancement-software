@@ -151,7 +151,7 @@ class Round:
         if promotion_data:
             piece_class_table: dict = {
                 "queen": "q",
-                "knight": "k",
+                "knight": "n",
                 "rook": "r",
                 "bishop": "b"
             }
