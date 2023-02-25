@@ -49,6 +49,12 @@ class BrowserHandler(ABC):
 
 
 @dataclass
+class UserSettings:
+    troll_opponents: bool = False
+    auto_move: bool = False
+
+
+@dataclass
 class Round:
     owner_page: Page
     player_color: chess.Color
@@ -57,6 +63,7 @@ class Round:
     chess_engine: ChessEngine
     chess_engine_limits: ChessEngineLimit = field(default_factory=ChessEngineLimit)
     # Secret variables
+    _user_settings: UserSettings = field(default_factory=UserSettings)
     _chess_engine_analysis_task: asyncio.Task | None = None
     _takeback_offer_origin: chess.Color | None = None
     # UI variables
@@ -82,8 +89,10 @@ class Round:
         round_instance: Round = Round(owner_page=page, player_color=player_color, chess_board=chess_board,
                                       transport=transport, chess_engine=engine)
 
-        # Configure the engine limits
-        round_instance.chess_engine_limits.depth = settings["engine-limits"]["depth"]
+        # Configure the settings
+        round_instance.update_settings(settings={
+            "engine-depth": settings["engine-limits"]["depth"]
+        } | settings["fun-settings"])
 
         # Create the shadow dom
         await round_instance.create_shadow_root()
@@ -96,6 +105,15 @@ class Round:
 
         # Return the round instance
         return round_instance
+
+    def update_settings(self, settings: dict) -> None:
+        for key, value in settings.items():
+            if key == "engine-depth":
+                self.chess_engine_limits.depth = value
+            elif key == "troll-opponents":
+                self._user_settings.troll_opponents = value
+            elif key == "auto-move":
+                self._user_settings.auto_move = value
 
     @property
     def scripts(self) -> dict[str, str]:
@@ -542,7 +560,7 @@ class Lichess(BrowserHandler):
             if round_identifier not in web_socket_url:
                 continue
             # Set the depth
-            chess_round.chess_engine_limits.depth = depth
+            chess_round.update_settings(settings={"engine-depth": depth})
             # Queue new engine analysis
             chess_round.queue_engine_analysis()
             return
