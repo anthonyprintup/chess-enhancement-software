@@ -157,6 +157,10 @@ class Round:
         event_loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
         asyncio.run_coroutine_threadsafe(self.draw_engine_analysis(analysis_result=engine_analysis_result), event_loop)
 
+        # Perform a move if automatic moves are enabled
+        if self.user_settings.auto_move and self.chess_board.turn == self.player_color:
+            asyncio.run_coroutine_threadsafe(self.perform_move(analysis_result=engine_analysis_result), event_loop)
+
     async def on_move(self, move_data: dict) -> None:
         uci_move: str = move_data["uci"]
         clock_data: dict = move_data.get("clock", {})
@@ -325,6 +329,26 @@ class Round:
         await shadow_root_element.eval_on_selector(
             selector="#drawing-canvas", expression=self.scripts["draw-data.js"], arg=match_data)
 
+    async def perform_move(self, analysis_result: AnalysisResultType) -> None:
+        analysis, best_move = analysis_result
+        assert best_move.move is not None
+        best_move_uci: str = best_move.move.uci()
+
+        piece_class_table: dict = {
+            "q": "queen",
+            "n": "knight",
+            "r": "rook",
+            "b": "bishop"
+        }
+        move_data: dict = {
+            "origin": best_move_uci[:2],
+            "destination": best_move_uci[2:4],
+            "promotion": None if len(best_move_uci) < 5 else piece_class_table[best_move_uci[4]]
+        }
+        await self.owner_page.evaluate(
+            expression="data => window.roundController.sendMove("
+                       "data.origin, data.destination, data.promotion, {premove: false});", arg=move_data)
+
     async def redraw_existing_engine_analysis(self, new_board_width: int) -> None:
         if not self._current_match_data:
             return
@@ -418,6 +442,7 @@ class Lichess(BrowserHandler):
     async def on_page(self, page: Page) -> None:
         # Expose engine bindings
         await page.expose_binding("set_depth", lambda source, depth: self.set_depth(source["page"], depth))
+        await page.expose_binding("toggle_automove", lambda source: self.toggle_automove(source["page"]))
         # Expose canvas bindings
         await page.expose_binding("redraw_existing_engine_analysis",
                                   lambda source, piece_size: self.redraw_existing_engine_analysis(
@@ -542,6 +567,18 @@ class Lichess(BrowserHandler):
             # Queue new engine analysis
             chess_round.queue_engine_analysis()
             return
+
+    def toggle_automove(self, page: Page) -> bool:
+        round_identifier: str = page.url[page.url.rfind("/") + 1:]
+        for web_socket_url, chess_round in self.chess_rounds.items():
+            if round_identifier not in web_socket_url:
+                continue
+
+            # Toggle automatic moves
+            new_value: bool = not chess_round.user_settings.auto_move
+            chess_round.update_settings(settings={"auto-move": new_value})
+            return new_value
+        return False
 
     async def redraw_existing_engine_analysis(self, page: Page, new_board_width: int) -> None:
         round_identifier: str = page.url[page.url.rfind("/") + 1:]
