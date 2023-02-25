@@ -64,7 +64,6 @@ class Round:
     chess_engine_limits: ChessEngineLimit = field(default_factory=ChessEngineLimit)
     user_settings: UserSettings = field(default_factory=UserSettings)
     # Secret variables
-    _user_settings: UserSettings = field(default_factory=UserSettings)
     _chess_engine_analysis_task: asyncio.Task | None = None
     _takeback_offer_origin: chess.Color | None = None
     # UI variables
@@ -557,7 +556,6 @@ class Lichess(BrowserHandler):
             await self.perform_round_cleanup(socket_identifier=socket_identifier)
 
     def set_depth(self, page: Page, depth: int) -> None:
-        # Find the correct socket
         round_identifier: str = page.url[page.url.rfind("/") + 1:]
         for web_socket_url, chess_round in self.chess_rounds.items():
             if round_identifier not in web_socket_url:
