@@ -114,8 +114,6 @@ class Round:
             return
         self._chess_engine_analysis_task.cancel(msg="New engine analysis task queued.")
         self._chess_engine_analysis_task = None
-        # Clear the current match data (saved for redrawing)
-        self._current_match_data = {}
 
     async def find_best_move(self) -> AnalysisResultType | tuple[None, None]:
         analysis: chess.engine.AnalysisResult = await self.chess_engine.analysis(
@@ -123,7 +121,10 @@ class Round:
         try:
             return analysis, await analysis.wait()
         except asyncio.CancelledError:
+            # Stop analysis
             analysis.stop()
+            # Clear the current match data (saved for redrawing)
+            self._current_match_data = {}
             return None, None
 
     def on_engine_analysis_finished(self, engine_analysis_future: asyncio.Future) -> None:
@@ -162,10 +163,10 @@ class Round:
         if move in self.chess_board.legal_moves:
             # Cancel any pending engine analysis
             self.cancel_engine_analysis()
-            # Push the move
-            self.chess_board.push(move=move)
             # Clear the canvas
             await self.clear_canvas()
+            # Push the move
+            self.chess_board.push(move=move)
 
             # Queue engine analysis
             if not self.chess_board.is_game_over():
