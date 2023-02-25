@@ -82,4 +82,12 @@
         context2d.fillStyle = "#000000";
         context2d.fillText(text, matchData.uiOffsets.x + 2, matchData.uiOffsets.y + yOffset + height - 2);
     }
+    // Draw the PV
+    // context2d.fillStyle = "#ffffff";
+    // context2d.fillRect(
+    //     matchData.uiOffsets.x + maxWidth + 2, matchData.uiOffsets.y,
+    //     536 - matchData.uiOffsets.x + maxWidth + 2, 11);
+    // context2d.fillStyle = "#000000";
+    // context2d.fillText(matchData.pv.join(", "),
+    //     matchData.uiOffsets.x + maxWidth + 6, matchData.uiOffsets.y + 8);
 }
