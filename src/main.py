@@ -89,7 +89,7 @@ class Round:
         await round_instance.create_shadow_root()
 
         # Queue engine analysis if the user begins the match
-        if player_color == chess.WHITE:
+        if chess_board.turn == player_color:
             # Wait for the engine to be ready
             await engine.ping()
             round_instance.queue_engine_analysis()
