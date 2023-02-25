@@ -70,6 +70,8 @@ class Round:
     _canvas_height_offset: int = 44  # how much to expand the height of the canvas by (for the engine data)
     _shadow_root: JSHandle | None = None
     _current_match_data: dict = field(default_factory=dict)
+    # Locks
+    _on_move_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     @staticmethod
     async def create(page: Page, player_color: chess.Color, move_data: list[dict], time_increment: float) -> Round:
@@ -164,43 +166,44 @@ class Round:
             asyncio.run_coroutine_threadsafe(self.perform_move(analysis_result=engine_analysis_result), event_loop)
 
     async def on_move(self, move_data: dict) -> None:
-        uci_move: str = move_data["uci"]
-        clock_data: dict = move_data.get("clock", {})
-        promotion_data: dict = move_data.get("promotion", {})
+        async with self._on_move_lock:
+            uci_move: str = move_data["uci"]
+            clock_data: dict = move_data.get("clock", {})
+            promotion_data: dict = move_data.get("promotion", {})
 
-        # Update the clock data
-        if clock_data:
-            self.chess_engine_limits.white_clock = clock_data["white"]
-            self.chess_engine_limits.black_clock = clock_data["black"]
+            # Update the clock data
+            if clock_data:
+                self.chess_engine_limits.white_clock = clock_data["white"]
+                self.chess_engine_limits.black_clock = clock_data["black"]
 
-        # Manually fix promotions
-        if promotion_data:
-            piece_class_table: dict = {
-                "queen": "q",
-                "knight": "n",
-                "rook": "r",
-                "bishop": "b"
-            }
-            uci_move += piece_class_table[promotion_data["pieceClass"]]
+            # Manually fix promotions
+            if promotion_data:
+                piece_class_table: dict = {
+                    "queen": "q",
+                    "knight": "n",
+                    "rook": "r",
+                    "bishop": "b"
+                }
+                uci_move += piece_class_table[promotion_data["pieceClass"]]
 
-        # Check if this is a valid move
-        move: chess.Move = chess.Move.from_uci(uci=uci_move)
-        if move in self.chess_board.legal_moves:
-            # Cancel any pending engine analysis
-            self.cancel_engine_analysis()
-            # Clear the canvas
-            await self.clear_canvas()
-            # Push the move
-            self.chess_board.push(move=move)
+            # Check if this is a valid move
+            move: chess.Move = chess.Move.from_uci(uci=uci_move)
+            if move in self.chess_board.legal_moves:
+                # Cancel any pending engine analysis
+                self.cancel_engine_analysis()
+                # Clear the canvas
+                await self.clear_canvas()
+                # Push the move
+                self.chess_board.push(move=move)
 
-            # Queue engine analysis
-            if not self.chess_board.is_game_over():
-                # Wait for the engine to be ready
-                await self.chess_engine.ping()
                 # Queue engine analysis
-                self.queue_engine_analysis()
-        else:
-            print(f"Attempted to perform an invalid move: {move=}, {move_data=}")
+                if not self.chess_board.is_game_over():
+                    # Wait for the engine to be ready
+                    await self.chess_engine.ping()
+                    # Queue engine analysis
+                    self.queue_engine_analysis()
+            else:
+                print(f"Attempted to perform an invalid move: {move=}, {move_data=}")
 
     def on_takeback_offer(self, origin: chess.Color) -> None:
         self._takeback_offer_origin = origin
