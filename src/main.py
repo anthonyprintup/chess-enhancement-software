@@ -14,7 +14,7 @@ from typing import Any, AsyncIterator, Pattern, TypeVar, TypeAlias
 import chess
 from chess.engine import Limit as ChessEngineLimit, UciProtocol as ChessEngine, popen_uci as open_chess_engine
 from playwright.async_api import Browser, BrowserContext, ElementHandle, JSHandle, Locator, Page, Playwright, \
-    WebSocket, async_playwright
+    APIResponse, Route, WebSocket, async_playwright
 
 BINARIES_PATH: Path = Path.cwd() / "binaries"
 STOCKFISH_PATH: Path = BINARIES_PATH / "stockfish"
@@ -424,6 +424,19 @@ class Lichess(BrowserHandler):
                                       source["page"], piece_size))
         # Register an event listener for websocket events
         page.on("websocket", functools.partial(self.on_websocket_created, page=page))
+
+        # Modify the round setup javascript to be able to access the internals
+        async def handle_round_route(route: Route) -> None:
+            response: APIResponse = await route.fetch()
+            response_body: str = await response.text()
+
+            new_code: str = "window.roundController = this;"
+
+            round_constructor_string: str = "var ft=class{constructor(t,o){"
+            round_constructor_index: int = response_body.find(round_constructor_string) + len(round_constructor_string)
+            response_body = response_body[:round_constructor_index] + new_code + response_body[round_constructor_index:]
+            await route.fulfill(response=response, body=response_body)
+        await page.route("**/round.min.js", handle_round_route)
 
     async def on_context_close(self, _: BrowserContext) -> None:
         for game_round in self.chess_rounds.values():
