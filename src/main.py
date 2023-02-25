@@ -62,6 +62,7 @@ class Round:
     transport: asyncio.SubprocessTransport
     chess_engine: ChessEngine
     chess_engine_limits: ChessEngineLimit = field(default_factory=ChessEngineLimit)
+    user_settings: UserSettings = field(default_factory=UserSettings)
     # Secret variables
     _user_settings: UserSettings = field(default_factory=UserSettings)
     _chess_engine_analysis_task: asyncio.Task | None = None
@@ -111,9 +112,9 @@ class Round:
             if key == "engine-depth":
                 self.chess_engine_limits.depth = value
             elif key == "troll-opponents":
-                self._user_settings.troll_opponents = value
+                self.user_settings.troll_opponents = value
             elif key == "auto-move":
-                self._user_settings.auto_move = value
+                self.user_settings.auto_move = value
 
     @property
     def scripts(self) -> dict[str, str]:
