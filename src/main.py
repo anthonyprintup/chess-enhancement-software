@@ -52,6 +52,7 @@ class BrowserHandler(ABC):
 class UserSettings:
     troll_opponents: bool = False
     auto_move: bool = False
+    abuse_premoves: bool = False
 
 
 @dataclass
@@ -119,6 +120,8 @@ class Round:
                 self.user_settings.troll_opponents = value
             elif key == "auto-move":
                 self.user_settings.auto_move = value
+            elif key == "abuse-premoves":
+                self.user_settings.abuse_premoves = value
 
     @property
     def scripts(self) -> dict[str, str]:
@@ -348,11 +351,12 @@ class Round:
         move_data: dict = {
             "origin": best_move_uci[:2],
             "destination": best_move_uci[2:4],
-            "promotion": None if len(best_move_uci) < 5 else piece_class_table[best_move_uci[4]]
+            "promotion": None if len(best_move_uci) < 5 else piece_class_table[best_move_uci[4]],
+            "premove": self.user_settings.abuse_premoves
         }
         await self.owner_page.evaluate(
             expression="data => window.roundController.sendMove("
-                       "data.origin, data.destination, data.promotion, {premove: false});", arg=move_data)
+                       "data.origin, data.destination, data.promotion, {premove: data.premove});", arg=move_data)
 
     async def redraw_existing_engine_analysis(self, new_board_width: int) -> None:
         if not self._current_match_data:
