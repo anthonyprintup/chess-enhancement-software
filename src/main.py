@@ -195,6 +195,7 @@ class Round:
         self.execute_engine_control_schemes()
 
     def execute_engine_control_schemes(self) -> None:
+        my_turn: bool = self.chess_board.turn == self.player_color
         move_number: int = self.chess_board.ply() // 2 + 1
         max_cp_score: int = max(self._cp_scores, default=(0, 0), key=lambda data: data[1])[1]
         engine_depth: int = self.chess_engine_limits.depth
@@ -202,7 +203,7 @@ class Round:
         for engine_control_scheme in self.engine_control_schemes:
             # Declare the locals
             locals_scope: dict = {
-                "player_move": self.chess_board.turn == self.player_color,
+                "my_turn": my_turn,
                 "move_number": move_number,
                 "max_cp_score": max_cp_score,
                 "depth": engine_depth
