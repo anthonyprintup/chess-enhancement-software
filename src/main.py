@@ -58,6 +58,7 @@ class UserSettings:
 @dataclass
 class Round:
     owner_page: Page
+    identifier: str
     player_color: chess.Color
     chess_board: chess.Board
     transport: asyncio.SubprocessTransport
@@ -75,7 +76,8 @@ class Round:
     _on_move_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     @staticmethod
-    async def create(page: Page, player_color: chess.Color, move_data: list[dict], time_increment: float) -> Round:
+    async def create(page: Page, identifier: str, player_color: chess.Color,
+                     move_data: list[dict], time_increment: float) -> Round:
         # Setup the chess board
         chess_board: chess.Board = chess.Board(fen=move_data[0]["fen"])
         for move in move_data[1:]:
@@ -89,8 +91,8 @@ class Round:
         await engine.configure(options=settings["uci-settings"])
 
         # Create a round instance
-        round_instance: Round = Round(owner_page=page, player_color=player_color, chess_board=chess_board,
-                                      transport=transport, chess_engine=engine)
+        round_instance: Round = Round(owner_page=page, identifier=identifier, player_color=player_color,
+                                      chess_board=chess_board, transport=transport, chess_engine=engine)
         # Setup time increments
         round_instance.chess_engine_limits.white_inc = time_increment
         round_instance.chess_engine_limits.black_inc = time_increment
@@ -477,21 +479,35 @@ class Lichess(BrowserHandler):
             await game_round.shutdown()
         self.chess_rounds.clear()
 
-    async def on_websocket_created(self, web_socket: WebSocket, page: Page) -> None:
-        # Check to make sure the web socket url matches the filter
+    @staticmethod
+    def generate_round_identifier(web_socket: WebSocket) -> str:
+        # Generate a pattern to match the WS URL
         url_pattern: Pattern[str] = re.compile(
-            r"wss://socket\d\.lichess\.org/"
-            r"(?P<round_type>play/\w{12}|watch/\w{8}/(?:white|black))/"
-            r"v(?P<socket_version>\d)\?sri=\w{12}(?:&v=(?P<move_number>\d+))?")
-        match: re.Match | None = re.match(pattern=url_pattern, string=web_socket.url)
-        if match is None:
-            return
-        # Temporarily ignore spectator/analysis modes
-        if not match.group("round_type").startswith("play"):
+            r"wss://socket\d\.lichess\.org/play/"
+            r"(?P<round_identifier>\w{12})/"
+            r"v(?P<socket_version>\d+)\?sri=\w{12}&v=(?P<ply_number>\d+)"
+        )
+        # Attempt to match the URL pattern
+        if not (match := re.match(pattern=url_pattern, string=web_socket.url)):
+            raise ValueError(f"{web_socket.url} failed to match the url pattern.")
+        # Return the round identifier
+        return match.group("round_identifier")
+
+    def find_round(self, page: Page) -> Round:
+        page_round_identifier: str = page.url[page.url.rfind("/") + 1:]
+        for round_identifier, chess_round in self.chess_rounds.items():
+            if round_identifier == page_round_identifier or round_identifier.startswith(page_round_identifier):
+                return chess_round
+        raise ValueError(f"{page_round_identifier} does not have an associated Round instance.")
+
+    async def on_websocket_created(self, web_socket: WebSocket, page: Page) -> None:
+        try:
+            round_identifier: str = self.generate_round_identifier(web_socket=web_socket)
+        except ValueError:
             return
 
         # Post a notification
-        print(f"Started a game from: {web_socket.url}")
+        print(f"Started a game: {round_identifier=}")
 
         # Locate the initial match data
         game_data: dict = {}
@@ -512,24 +528,20 @@ class Lichess(BrowserHandler):
         player_color: chess.Color = chess.WHITE if game_data["player"]["color"] == "white" else chess.BLACK
         time_increment: float = float(game_data["clock"]["increment"]) if "clock" in game_data else 0.0
         move_data: list[dict] = game_data.get("steps", game_data.get("treeParts", []))
-        self.chess_rounds[web_socket.url] = await Round.create(
-            page=page, player_color=player_color, move_data=move_data, time_increment=time_increment)
+        self.chess_rounds[round_identifier] = await Round.create(
+            page=page, identifier=round_identifier, player_color=player_color,
+            move_data=move_data, time_increment=time_increment)
 
         # Register web socket events
-        web_socket.on("framereceived", functools.partial(self.on_websocket_message,
-                                                         socket_identifier=web_socket.url,
-                                                         chess_round=self.chess_rounds[web_socket.url],
-                                                         from_client=False))
-        web_socket.on("framesent", functools.partial(self.on_websocket_message,
-                                                     socket_identifier=web_socket.url,
-                                                     chess_round=self.chess_rounds[web_socket.url],
-                                                     from_client=True))
+        web_socket.on("framereceived", functools.partial(
+            self.on_websocket_message, chess_round=self.chess_rounds[round_identifier], from_client=False))
+        web_socket.on("framesent", functools.partial(
+            self.on_websocket_message, chess_round=self.chess_rounds[round_identifier], from_client=True))
 
         # Remove the game round from the internal list
         web_socket.on("close", self.on_websocket_closed)
 
-    async def on_websocket_message(self, payload: str,
-                                   socket_identifier: str, chess_round: Round, from_client: bool) -> None:
+    async def on_websocket_message(self, payload: str, chess_round: Round, from_client: bool) -> None:
         # Ignore messages from the client
         if from_client:
             return
@@ -564,30 +576,29 @@ class Lichess(BrowserHandler):
             # Clear the canvas
             await chess_round.clear_canvas()
             # Shutdown the chess round instance
-            await self.perform_round_cleanup(socket_identifier=socket_identifier)
+            await self.perform_round_cleanup(round_identifier=chess_round.identifier)
 
-    def set_depth(self, page: Page, depth: int) -> None:
-        round_identifier: str = page.url[page.url.rfind("/") + 1:]
-        for web_socket_url, chess_round in self.chess_rounds.items():
-            if round_identifier not in web_socket_url:
-                continue
-            # Set the depth
+    def set_depth(self, page: Page, depth: int) -> str:
+        try:
+            # Attempt to find the associated chess round
+            chess_round: Round = self.find_round(page=page)
+            # Update the engine depth
             chess_round.update_settings(settings={"engine-depth": depth})
-            # Queue new engine analysis
             chess_round.queue_engine_analysis()
-            return
+            return f"set engine depth to {depth}"
+        except ValueError:
+            return "could not find a chess round"
 
-    def toggle_automove(self, page: Page) -> bool:
-        round_identifier: str = page.url[page.url.rfind("/") + 1:]
-        for web_socket_url, chess_round in self.chess_rounds.items():
-            if round_identifier not in web_socket_url:
-                continue
-
+    def toggle_automove(self, page: Page) -> str:
+        try:
+            # Attempt to find the associated chess round
+            chess_round: Round = self.find_round(page=page)
             # Toggle automatic moves
             new_value: bool = not chess_round.user_settings.auto_move
             chess_round.update_settings(settings={"auto-move": new_value})
-            return new_value
-        return False
+            return f"{'enabled' if new_value else 'disabled'} automatic moves"
+        except ValueError:
+            return "could not find a chess round"
 
     async def redraw_existing_engine_analysis(self, page: Page, new_board_width: int) -> None:
         round_identifier: str = page.url[page.url.rfind("/") + 1:]
@@ -597,21 +608,21 @@ class Lichess(BrowserHandler):
             await chess_round.redraw_existing_engine_analysis(new_board_width=new_board_width)
             return
 
-    async def perform_round_cleanup(self, socket_identifier: str) -> None:
+    async def perform_round_cleanup(self, round_identifier: str) -> None:
         async with self._round_cleanup_lock:
             # Check if the game has already ended
-            if socket_identifier not in self.chess_rounds:
+            if round_identifier not in self.chess_rounds:
                 return
 
             # Push a notification
-            print(f"Shutting down a game: {socket_identifier}")
+            print(f"Shutting down a game: {round_identifier=}")
 
             # Perform cleanup
-            await self.chess_rounds[socket_identifier].shutdown()
-            del self.chess_rounds[socket_identifier]
+            await self.chess_rounds[round_identifier].shutdown()
+            del self.chess_rounds[round_identifier]
 
     async def on_websocket_closed(self, web_socket: WebSocket) -> None:
-        await self.perform_round_cleanup(socket_identifier=web_socket.url)
+        await self.perform_round_cleanup(round_identifier=self.generate_round_identifier(web_socket=web_socket))
 
 
 async def main() -> int:
