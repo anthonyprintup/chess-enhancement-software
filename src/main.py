@@ -195,14 +195,13 @@ class Round:
         self.execute_engine_control_schemes()
 
     def execute_engine_control_schemes(self) -> None:
+        ply_number: int = self.chess_board.ply()
         max_cp_score: int = max(self._cp_scores, default=(0, 0), key=lambda data: data[1])[1]
+        engine_depth: int = self.chess_engine_limits.depth
+
         for engine_control_scheme in self.engine_control_schemes:
             # Declare the locals
-            locals_scope: dict = {
-                "move_number": self.chess_board.fullmove_number,
-                "max_cp_score": max_cp_score,
-                "depth": self.chess_engine_limits.depth
-            }
+            locals_scope: dict = {"ply_number": ply_number, "max_cp_score": max_cp_score, "depth": engine_depth}
             # Execute the control scheme (note: this is unsafe, even without builtins)
             exec(f"if {engine_control_scheme.condition}: {engine_control_scheme.operation}", {"__builtins__": None},
                  locals_scope)
