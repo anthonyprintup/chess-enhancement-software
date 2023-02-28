@@ -55,6 +55,12 @@ class UserSettings:
     abuse_premoves: bool = False
 
 
+@dataclass(frozen=True)
+class EngineControlScheme:
+    condition: str
+    operation: str
+
+
 @dataclass
 class Round:
     owner_page: Page
@@ -63,9 +69,11 @@ class Round:
     chess_board: chess.Board
     transport: asyncio.SubprocessTransport
     chess_engine: ChessEngine
+    engine_control_schemes: list[EngineControlScheme]
     chess_engine_limits: ChessEngineLimit = field(default_factory=ChessEngineLimit)
     user_settings: UserSettings = field(default_factory=UserSettings)
     # Secret variables
+    _cp_scores: list[tuple[int, int]] = field(default_factory=list)
     _chess_engine_analysis_task: asyncio.Task | None = None
     _takeback_offer_origin: chess.Color | None = None
     # UI variables
@@ -86,13 +94,20 @@ class Round:
         # Read the preferred settings from disk (note: do not cache)
         settings: dict = json.loads(STOCKFISH_SETTINGS_PATH.read_text())
 
+        # Parse the engine control schemes
+        engine_control_schemes: list[EngineControlScheme] = []
+        for condition, operation in ((engine_control_scheme["condition"], engine_control_scheme["operation"])
+                                     for engine_control_scheme in settings["engine-control-schemes"]):
+            engine_control_schemes.append(EngineControlScheme(condition=condition, operation=operation))
+
         # Spawn an engine instance and configure the engine
         transport, engine = await open_chess_engine(str(STOCKFISH_ENGINE_PATH))
         await engine.configure(options=settings["uci-settings"])
 
         # Create a round instance
         round_instance: Round = Round(owner_page=page, identifier=identifier, player_color=player_color,
-                                      chess_board=chess_board, transport=transport, chess_engine=engine)
+                                      chess_board=chess_board, transport=transport, chess_engine=engine,
+                                      engine_control_schemes=engine_control_schemes)
         # Setup time increments
         round_instance.chess_engine_limits.white_inc = time_increment
         round_instance.chess_engine_limits.black_inc = time_increment
@@ -162,6 +177,12 @@ class Round:
         # Fetch the result (this will raise an exception if an exception was raised in the future)
         engine_analysis_result: AnalysisResultType = engine_analysis_future.result()
 
+        # Keep track of the centipawn scores
+        analysis, _ = engine_analysis_result
+        player_score: chess.engine.Score = analysis.info["score"].pov(color=self.player_color)
+        if isinstance(player_score, chess.engine.Cp):
+            self._cp_scores.append((self.chess_board.ply(), player_score.score()))
+
         # Wait for the data to draw on the canvas
         event_loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
         asyncio.run_coroutine_threadsafe(self.draw_engine_analysis(analysis_result=engine_analysis_result), event_loop)
@@ -169,6 +190,25 @@ class Round:
         # Perform a move if automatic moves are enabled
         if self.user_settings.auto_move and self.chess_board.turn == self.player_color:
             asyncio.run_coroutine_threadsafe(self.perform_move(analysis_result=engine_analysis_result), event_loop)
+
+        # Execute engine control schemes
+        self.execute_engine_control_schemes()
+
+    def execute_engine_control_schemes(self) -> None:
+        max_cp_score: int = max(self._cp_scores, default=(0, 0), key=lambda data: data[1])[1]
+        for engine_control_scheme in self.engine_control_schemes:
+            # Declare the locals
+            locals_scope: dict = {
+                "move_number": self.chess_board.fullmove_number,
+                "max_cp_score": max_cp_score,
+                "depth": self.chess_engine_limits.depth
+            }
+            # Execute the control scheme (note: this is unsafe, even without builtins)
+            exec(f"if {engine_control_scheme.condition}: {engine_control_scheme.operation}", {"__builtins__": None},
+                 locals_scope)
+
+            # Update local variables
+            self.chess_engine_limits.depth = locals_scope.get("depth", self.chess_engine_limits.depth)
 
     async def on_move(self, move_data: dict) -> None:
         async with self._on_move_lock:
@@ -230,6 +270,9 @@ class Round:
 
         # Clear the takeback offer origin variable
         self._takeback_offer_origin = None
+
+        # Update the centipawn scores (discard scores that aren't valid anymore)
+        self._cp_scores = [score for score in self._cp_scores if score[0] < self.chess_board.ply()]
 
         # Clear the canvas
         await self.clear_canvas()
@@ -298,13 +341,13 @@ class Round:
 
         analysis_score: chess.engine.PovScore = analysis.info["score"]
         player_score: chess.engine.Score = analysis_score.pov(color=self.player_color)
-        score: str = f"{player_score.score()}" if player_score.mate() is None else f"#{player_score.mate()}"
+        score: str = f"{player_score.score()}" if not player_score.is_mate() else f"#{player_score.mate()}"
 
         # Determine the background color to use for the score
         score_color: str = "#BDC3C7"
-        if player_score.is_mate():
+        if isinstance(player_score, chess.engine.Mate):
             score_color = "#2ECC71" if player_score.mate() >= 1 else "#E74C3C"
-        elif player_score.score() != 0:
+        elif isinstance(player_score, chess.engine.Cp) and player_score.score() != 0:
             score_color = "#2ECC71" if player_score.score() > 0 else "#E74C3C"
 
         # Rebuild the shadow root if it's required
