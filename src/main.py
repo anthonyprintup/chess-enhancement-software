@@ -278,6 +278,27 @@ class Round:
         # Queue engine analysis
         self.queue_engine_analysis()
 
+    async def perform_move(self, analysis_result: AnalysisResultType) -> None:
+        analysis, best_move = analysis_result
+        assert best_move.move is not None
+        best_move_uci: str = best_move.move.uci()
+
+        piece_class_table: dict = {
+            "q": "queen",
+            "n": "knight",
+            "r": "rook",
+            "b": "bishop"
+        }
+        move_data: dict = {
+            "origin": best_move_uci[:2],
+            "destination": best_move_uci[2:4],
+            "promotion": None if len(best_move_uci) < 5 else piece_class_table[best_move_uci[4]],
+            "premove": self.user_settings.abuse_premoves
+        }
+        await self.owner_page.evaluate(
+            expression="data => window.roundController.sendMove("
+                       "data.origin, data.destination, data.promotion, {premove: data.premove});", arg=move_data)
+
     async def create_shadow_root(self) -> ElementHandle:
         # Create a shadow-root in the board element and add a resize observer
         board_locator: Locator = self.owner_page.locator(selector="cg-board")
@@ -380,27 +401,6 @@ class Round:
         self._current_match_data = match_data
         await shadow_root_element.eval_on_selector(
             selector="#drawing-canvas", expression=self.scripts["draw-data.js"], arg=match_data)
-
-    async def perform_move(self, analysis_result: AnalysisResultType) -> None:
-        analysis, best_move = analysis_result
-        assert best_move.move is not None
-        best_move_uci: str = best_move.move.uci()
-
-        piece_class_table: dict = {
-            "q": "queen",
-            "n": "knight",
-            "r": "rook",
-            "b": "bishop"
-        }
-        move_data: dict = {
-            "origin": best_move_uci[:2],
-            "destination": best_move_uci[2:4],
-            "promotion": None if len(best_move_uci) < 5 else piece_class_table[best_move_uci[4]],
-            "premove": self.user_settings.abuse_premoves
-        }
-        await self.owner_page.evaluate(
-            expression="data => window.roundController.sendMove("
-                       "data.origin, data.destination, data.promotion, {premove: data.premove});", arg=move_data)
 
     async def redraw_existing_engine_analysis(self, new_board_width: int) -> None:
         if not self._current_match_data:
