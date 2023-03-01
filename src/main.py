@@ -213,7 +213,9 @@ class Round:
                  locals_scope)
 
             # Update local variables
-            self.chess_engine_limits.depth = locals_scope.get("depth", self.chess_engine_limits.depth)
+            new_depth: int = locals_scope.get("depth", engine_depth)
+            if new_depth != engine_depth:
+                self.chess_engine_limits.depth = new_depth
 
     async def on_move(self, move_data: dict) -> None:
         async with self._on_move_lock:
