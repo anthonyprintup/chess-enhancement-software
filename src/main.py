@@ -491,8 +491,7 @@ class Lichess(BrowserHandler):
             await lichess_handler.close()
 
     async def wait(self) -> None:
-        # https://github.com/microsoft/playwright-python/issues/1748
-        await asyncio.wait_for(self.browser_context._impl_obj._pause(), None)
+        await self.browser_context.pages[0].pause()
 
     async def close(self) -> None:
         await self.browser_context.close()
