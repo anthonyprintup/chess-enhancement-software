@@ -187,12 +187,25 @@ class Round:
         event_loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
         asyncio.run_coroutine_threadsafe(self.draw_engine_analysis(analysis_result=engine_analysis_result), event_loop)
 
+        # Send an unexpected message to the opponent
+        if self.user_settings.troll_opponents:
+            max_cp_score: int = max(self._cp_scores, default=(0, 0), key=lambda data: data[1])[1]
+            if max_cp_score >= 150:
+                asyncio.run_coroutine_threadsafe(self.troll_opponent(), event_loop)
+                self.user_settings.troll_opponents = False
+
         # Perform a move if automatic moves are enabled
         if self.user_settings.auto_move and self.chess_board.turn == self.player_color:
             asyncio.run_coroutine_threadsafe(self.perform_move(analysis_result=engine_analysis_result), event_loop)
 
         # Execute engine control schemes
         self.execute_engine_control_schemes()
+
+    async def troll_opponent(self) -> None:
+        await self.owner_page.evaluate(expression="""
+            lichess.pubsub.emit("socket.send", "talk", "Good game");
+            setTimeout(() => lichess.pubsub.emit("socket.send", "talk", "Well played"), 500)
+        """)
 
     def execute_engine_control_schemes(self) -> None:
         my_turn: bool = self.chess_board.turn == self.player_color
