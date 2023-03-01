@@ -270,7 +270,7 @@ class Round:
                     # Queue engine analysis
                     self.queue_engine_analysis()
             else:
-                print(f"Attempted to perform an invalid move: {move=}, {move_data=}")
+                print(f"Attempted to perform an invalid move: {move=}, {move_data=}, {self.chess_board=}")
 
     def on_takeback_offer(self, origin: chess.Color) -> None:
         self._takeback_offer_origin = origin
@@ -571,7 +571,7 @@ class Lichess(BrowserHandler):
             return
 
         # Post a notification
-        print(f"Started a game: {round_identifier=}")
+        print(f"Started a game: {round_identifier}")
 
         # Locate the initial match data
         game_data: dict = {}
@@ -679,7 +679,7 @@ class Lichess(BrowserHandler):
                 return
 
             # Push a notification
-            print(f"Shutting down a game: {round_identifier=}")
+            print(f"Ended a game: {round_identifier}")
 
             # Perform cleanup
             await self.chess_rounds[round_identifier].shutdown()
